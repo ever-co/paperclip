@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType, ExecutionWorkspaceConfig } from "@paperclipai/shared";
 import {
@@ -29,6 +29,7 @@ import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
+import { isManagedCompany, managedCompanyFilter, getServerId } from "../company-affinity.js";
 import { summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
 import {
   buildWorkspaceReadyComment,
@@ -1610,6 +1611,7 @@ export function heartbeatService(db: Db) {
           sessionIdBefore: sessionBefore,
           retryOfRunId: run.id,
           processLossRetryCount: (run.processLossRetryCount ?? 0) + 1,
+          serverId: getServerId(),
           updatedAt: now,
         })
         .returning()
@@ -1787,8 +1789,11 @@ export function heartbeatService(db: Db) {
   async function reapOrphanedRuns(opts?: { staleThresholdMs?: number }) {
     const staleThresholdMs = opts?.staleThresholdMs ?? 0;
     const now = new Date();
+    const currentServerId = getServerId();
 
     // Find all runs stuck in "running" state (queued runs are legitimately waiting; resumeQueuedRuns handles them)
+    // In multi-server mode, only look at runs for companies managed by this server.
+    // When serverId is set, further restrict to runs started by this server (or legacy NULL serverId runs).
     const activeRuns = await db
       .select({
         run: heartbeatRuns,
@@ -1796,7 +1801,15 @@ export function heartbeatService(db: Db) {
       })
       .from(heartbeatRuns)
       .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
-      .where(eq(heartbeatRuns.status, "running"));
+      .where(
+        and(
+          eq(heartbeatRuns.status, "running"),
+          managedCompanyFilter(heartbeatRuns.companyId),
+          currentServerId
+            ? or(eq(heartbeatRuns.serverId, currentServerId), isNull(heartbeatRuns.serverId))
+            : undefined,
+        ),
+      );
 
     const reaped: string[] = [];
 
@@ -1885,10 +1898,16 @@ export function heartbeatService(db: Db) {
   }
 
   async function resumeQueuedRuns() {
+    // In multi-server mode, only resume queued runs for companies managed by this server.
     const queuedRuns = await db
       .select({ agentId: heartbeatRuns.agentId })
       .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.status, "queued"));
+      .where(
+        and(
+          eq(heartbeatRuns.status, "queued"),
+          managedCompanyFilter(heartbeatRuns.companyId),
+        ),
+      );
 
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
     for (const agentId of agentIds) {
@@ -1955,6 +1974,9 @@ export function heartbeatService(db: Db) {
     return withAgentStartLock(agentId, async () => {
       const agent = await getAgent(agentId);
       if (!agent) return [];
+      // In multi-server mode, only start processes for companies managed by this server.
+      // Non-managed queued runs will be picked up by the managing server's resumeQueuedRuns tick.
+      if (!isManagedCompany(agent.companyId)) return [];
       if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
         return [];
       }
@@ -2986,6 +3008,7 @@ export function heartbeatService(db: Db) {
             wakeupRequestId: deferred.id,
             contextSnapshot: promotedContextSnapshot,
             sessionIdBefore: sessionBefore,
+            serverId: getServerId(),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -3375,6 +3398,7 @@ export function heartbeatService(db: Db) {
             wakeupRequestId: wakeupRequest.id,
             contextSnapshot: enrichedContextSnapshot,
             sessionIdBefore: sessionBefore,
+            serverId: getServerId(),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -3500,6 +3524,7 @@ export function heartbeatService(db: Db) {
         wakeupRequestId: wakeupRequest.id,
         contextSnapshot: enrichedContextSnapshot,
         sessionIdBefore: sessionBefore,
+        serverId: getServerId(),
       })
       .returning()
       .then((rows) => rows[0]);
@@ -3868,7 +3893,9 @@ export function heartbeatService(db: Db) {
     resumeQueuedRuns,
 
     tickTimers: async (now = new Date()) => {
-      const allAgents = await db.select().from(agents);
+      // In multi-server mode, only tick timers for agents belonging to managed companies.
+      const companyFilter = managedCompanyFilter(agents.companyId);
+      const allAgents = await db.select().from(agents).where(companyFilter);
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;

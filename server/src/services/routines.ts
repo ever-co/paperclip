@@ -27,6 +27,7 @@ import type {
 } from "@paperclipai/shared";
 import { conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { managedCompanyFilter } from "../company-affinity.js";
 import { issueService } from "./issues.js";
 import { secretService } from "./secrets.js";
 import { parseCron, validateCron } from "./cron.js";
@@ -1186,6 +1187,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
             eq(routines.status, "active"),
             isNotNull(routineTriggers.nextRunAt),
             lte(routineTriggers.nextRunAt, now),
+            managedCompanyFilter(routines.companyId),
           ),
         )
         .orderBy(asc(routineTriggers.nextRunAt), asc(routineTriggers.createdAt));

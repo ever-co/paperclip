@@ -8,6 +8,7 @@ import type { AdapterRuntimeServiceReport } from "@paperclipai/adapter-utils";
 import type { Db } from "@paperclipai/db";
 import { executionWorkspaces, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { managedCompanyFilter } from "../company-affinity.js";
 import { asNumber, asString, parseObject, renderTemplate } from "../adapters/utils.js";
 import { resolveHomeAwarePath } from "../home-paths.js";
 import {
@@ -1808,6 +1809,9 @@ export async function listWorkspaceRuntimeServicesForProjectWorkspaces(
 }
 
 export async function reconcilePersistedRuntimeServicesOnStartup(db: Db) {
+  // In multi-server mode, only reconcile services for companies managed by this server.
+  // Without this, Server B starting up would mark Server A's live services as stopped.
+  const companyFilter = managedCompanyFilter(workspaceRuntimeServices.companyId);
   const rows = await db
     .select()
     .from(workspaceRuntimeServices)
@@ -1815,6 +1819,7 @@ export async function reconcilePersistedRuntimeServicesOnStartup(db: Db) {
       and(
         eq(workspaceRuntimeServices.provider, "local_process"),
         inArray(workspaceRuntimeServices.status, ["starting", "running"]),
+        companyFilter,
       ),
     );
 

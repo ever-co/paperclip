@@ -33,6 +33,8 @@ type StartupBannerOptions = {
   databaseBackupIntervalMinutes: number;
   databaseBackupRetentionDays: number;
   databaseBackupDir: string;
+  managedCompanyIds: string[] | null;
+  serverId: string | null;
 };
 
 const ansi = {
@@ -163,6 +165,10 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
     row("Heartbeat", heartbeat),
     row("DB Backup", dbBackup),
     row("Backup Dir", opts.databaseBackupDir),
+    opts.serverId ? row("Server ID", color(opts.serverId, "cyan")) : null,
+    opts.managedCompanyIds
+      ? row("Affinity", `${opts.managedCompanyIds.length} company ID(s) ${color(`(${opts.managedCompanyIds.join(", ")})`, "dim")}`)
+      : null,
     row("Config", configPath),
     agentJwtSecret.status === "warn"
       ? color("  ───────────────────────────────────────────────────────", "yellow")
