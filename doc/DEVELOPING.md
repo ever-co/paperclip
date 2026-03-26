@@ -448,3 +448,109 @@ Networking behavior for this smoke script:
 - auto-detects and prints a Paperclip host URL reachable from inside OpenClaw Docker
 - default container-side host alias is `host.docker.internal` (override with `PAPERCLIP_HOST_FROM_CONTAINER` / `PAPERCLIP_HOST_PORT`)
 - if Paperclip rejects container hostnames in authenticated/private mode, allow `host.docker.internal` via `pnpm paperclipai allowed-hostname host.docker.internal` and restart Paperclip
+
+## Multi-Server Deployment (Company Affinity)
+
+Paperclip supports running multiple server instances against a single shared
+PostgreSQL database. Each instance manages background work (heartbeat
+scheduler, routine scheduler, orphan reaper) for a specific subset of
+companies while API routes remain globally accessible from any instance.
+
+### Architecture
+
+```
+ ┌──── PC-A (.env) ──────┐     ┌──── PC-B (.env) ──────┐
+ │ MANAGED_COMPANY_IDS=   │     │ MANAGED_COMPANY_IDS=   │
+ │   company-1,company-2  │     │   company-3            │
+ │ SERVER_ID=pc-a         │     │ SERVER_ID=pc-b         │
+ │ DATABASE_URL=shared    │     │ DATABASE_URL=shared    │
+ └────────┬───────────────┘     └────────┬───────────────┘
+          │                              │
+          └───────────┬──────────────────┘
+                      ▼
+              ┌──────────────┐
+              │ Shared       │
+              │ PostgreSQL   │
+              └──────────────┘
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | Connection string to the shared PostgreSQL instance |
+| `PAPERCLIP_MANAGED_COMPANY_IDS` | No | (all) | Comma-separated list of company UUIDs this server manages. When unset, the server manages all companies (single-server default). |
+| `PAPERCLIP_SERVER_ID` | No | — | Unique identifier for this server instance. Written to `heartbeat_runs.server_id` so the orphan reaper only reaps runs started by this server. Recommended in multi-server setups. |
+| `SERVE_UI` | No | `true` | Set to `false` on headless worker nodes that should not serve the board UI. |
+
+### Setup Steps
+
+1. **Provision a shared PostgreSQL database.** Any PostgreSQL 14+ instance
+   reachable from all servers will work (Supabase, Docker, managed cloud).
+
+2. **Collect company IDs.** Find the UUID of each company in the Paperclip
+   board UI or via `GET /api/companies`.
+
+3. **Configure each server's `.env` file:**
+
+   ```env
+   # --- PC-A: manages company-1 and company-2 ---
+   DATABASE_URL=postgres://user:pass@db-host:5432/paperclip
+   PAPERCLIP_MANAGED_COMPANY_IDS=aaaaaaaa-...,bbbbbbbb-...
+   PAPERCLIP_SERVER_ID=pc-a
+   # Optional: disable UI on worker-only nodes
+   # SERVE_UI=false
+   ```
+
+   ```env
+   # --- PC-B: manages company-3 ---
+   DATABASE_URL=postgres://user:pass@db-host:5432/paperclip
+   PAPERCLIP_MANAGED_COMPANY_IDS=cccccccc-...
+   PAPERCLIP_SERVER_ID=pc-b
+   ```
+
+4. **Start each server normally** (`pnpm dev`, `npx paperclipai`, etc.).
+   The startup banner will display the managed company IDs and server ID.
+
+### Behaviour Details
+
+- **Background schedulers** (heartbeat timer, routine cron, orphan reaper,
+  queued-run resumption, runtime service reconciliation) only process
+  companies listed in `PAPERCLIP_MANAGED_COMPANY_IDS`.
+
+- **API routes are unfiltered.** Any server can create/read/update data for
+  all companies. A wakeup triggered on a non-managing server writes the run
+  to the shared DB; the managing server picks it up on its next 30-second
+  scheduler tick.
+
+- **Orphan reaper safety.** When `PAPERCLIP_SERVER_ID` is set, each server's
+  orphan reaper only considers runs tagged with its own `server_id` (plus
+  legacy `NULL` server_id runs). This prevents Server A from reaping runs
+  that Server B is actively executing.
+
+- **Startup validation.** On boot, the server logs a warning for any company
+  ID in `PAPERCLIP_MANAGED_COMPANY_IDS` that does not exist in the database.
+
+- **Backward compatibility.** When `PAPERCLIP_MANAGED_COMPANY_IDS` is unset,
+  the server manages all companies identically to a single-server deployment.
+  No configuration changes are needed for existing setups.
+
+### Operational Notes
+
+- **Assign each company to exactly one server.** If two servers manage the
+  same company, duplicate heartbeat ticks and routine triggers will fire.
+  There is no distributed lock — the operator is responsible for
+  non-overlapping assignments.
+
+- **Cross-server latency.** When a user triggers a wakeup from the UI
+  served by a non-managing server, the run is enqueued in the shared DB.
+  The managing server picks it up on its next scheduler tick (~15-30 s).
+
+- **File systems are independent.** Each server uses its own local workspace
+  directories, logs, and storage. Agent adapters run as local processes on
+  the server that manages the company.
+
+- **Mixed OS deployments** are supported. Each server can run on a different
+  OS (Windows, macOS, Linux) as long as it can connect to the shared
+  PostgreSQL database and run compatible agent adapters.
+
