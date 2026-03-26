@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import type { Request as ExpressRequest, RequestHandler } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   createDb,
   ensurePostgresDatabase,
@@ -33,6 +33,7 @@ import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
+import { initCompanyAffinity, getManagedCompanyIds } from "./company-affinity.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -81,6 +82,15 @@ export async function startServer(): Promise<StartedServer> {
   }
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
     process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
+  }
+
+  // Initialise company affinity filter for multi-server deployments.
+  initCompanyAffinity(config.managedCompanyIds, config.serverId);
+  if (config.managedCompanyIds) {
+    logger.info(
+      { managedCompanyIds: config.managedCompanyIds, serverId: config.serverId },
+      `Company affinity mode: managing ${config.managedCompanyIds.length} company ID(s)`,
+    );
   }
   
   type MigrationSummary =
@@ -423,6 +433,26 @@ export async function startServer(): Promise<StartedServer> {
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
   
+  // Validate managed company IDs against the database (after migrations).
+  if (config.managedCompanyIds && config.managedCompanyIds.length > 0) {
+    try {
+      const existingCompanies = await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(inArray(companies.id, config.managedCompanyIds));
+      const existingIds = new Set(existingCompanies.map((c) => c.id));
+      const missing = config.managedCompanyIds.filter((id) => !existingIds.has(id));
+      if (missing.length > 0) {
+        logger.warn(
+          { missingCompanyIds: missing },
+          `PAPERCLIP_MANAGED_COMPANY_IDS contains ${missing.length} company ID(s) not found in the database`,
+        );
+      }
+    } catch (err) {
+      logger.warn({ err }, "Failed to validate managed company IDs against the database");
+    }
+  }
+
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(
       `local_trusted mode requires loopback host binding (received: ${config.host}). ` +
@@ -694,6 +724,8 @@ export async function startServer(): Promise<StartedServer> {
         databaseBackupIntervalMinutes: config.databaseBackupIntervalMinutes,
         databaseBackupRetentionDays: config.databaseBackupRetentionDays,
         databaseBackupDir: config.databaseBackupDir,
+        managedCompanyIds: config.managedCompanyIds,
+        serverId: config.serverId,
       });
 
       const boardClaimUrl = getBoardClaimWarningUrl(config.host, listenPort);
