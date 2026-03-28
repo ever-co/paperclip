@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-cursor-local/server";
+import { writeFakeNodeCommand } from "./helpers/fake-adapter-command.js";
 
 async function writeFakeAgentCommand(binDir: string, argsCapturePath: string): Promise<string> {
   const commandPath = path.join(binDir, "agent");
-  const script = `#!/usr/bin/env node
-const fs = require("node:fs");
+  const scriptBody = `const fs = require("node:fs");
 const outPath = process.env.PAPERCLIP_TEST_ARGS_PATH;
 if (outPath) {
   fs.writeFileSync(outPath, JSON.stringify(process.argv.slice(2)), "utf8");
@@ -22,9 +22,7 @@ console.log(JSON.stringify({
   result: "hello",
 }));
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
-  return commandPath;
+  return writeFakeNodeCommand(commandPath, scriptBody);
 }
 
 describe("cursor environment diagnostics", () => {

@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execute } from "@paperclipai/adapter-gemini-local/server";
+import { writeFakeNodeCommand } from "./helpers/fake-adapter-command.js";
 
-async function writeFakeGeminiCommand(commandPath: string): Promise<void> {
-  const script = `#!/usr/bin/env node
-const fs = require("node:fs");
+async function writeFakeGeminiCommand(commandPath: string): Promise<string> {
+  const scriptBody = `const fs = require("node:fs");
 
 const capturePath = process.env.PAPERCLIP_TEST_CAPTURE_PATH;
 const payload = {
@@ -35,8 +35,7 @@ console.log(JSON.stringify({
   result: "ok",
 }));
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
+  return writeFakeNodeCommand(commandPath, scriptBody);
 }
 
 type CapturePayload = {
@@ -51,7 +50,7 @@ describe("gemini execute", () => {
     const commandPath = path.join(root, "gemini");
     const capturePath = path.join(root, "capture.json");
     await fs.mkdir(workspace, { recursive: true });
-    await writeFakeGeminiCommand(commandPath);
+    const resolvedCommand = await writeFakeGeminiCommand(commandPath);
 
     const previousHome = process.env.HOME;
     process.env.HOME = root;
@@ -74,7 +73,7 @@ describe("gemini execute", () => {
           taskKey: null,
         },
         config: {
-          command: commandPath,
+          command: resolvedCommand,
           cwd: workspace,
           model: "gemini-2.5-pro",
           env: {
@@ -133,7 +132,7 @@ describe("gemini execute", () => {
     const commandPath = path.join(root, "gemini");
     const capturePath = path.join(root, "capture.json");
     await fs.mkdir(workspace, { recursive: true });
-    await writeFakeGeminiCommand(commandPath);
+    const resolvedCommand = await writeFakeGeminiCommand(commandPath);
 
     const previousHome = process.env.HOME;
     process.env.HOME = root;
@@ -144,7 +143,7 @@ describe("gemini execute", () => {
         agent: { id: "a1", companyId: "c1", name: "G", adapterType: "gemini_local", adapterConfig: {} },
         runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
         config: {
-          command: commandPath,
+          command: resolvedCommand,
           cwd: workspace,
           env: { PAPERCLIP_TEST_CAPTURE_PATH: capturePath },
         },

@@ -251,17 +251,16 @@ describe("realizeExecutionWorkspace", () => {
     const repoRoot = await createTempRepo();
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
     await fs.writeFile(
-      path.join(repoRoot, "scripts", "provision.sh"),
+      path.join(repoRoot, "scripts", "provision.js"),
       [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        "printf '%s\\n' \"$PAPERCLIP_WORKSPACE_BRANCH\" > .paperclip-provision-branch",
-        "printf '%s\\n' \"$PAPERCLIP_WORKSPACE_BASE_CWD\" > .paperclip-provision-base",
-        "printf '%s\\n' \"$PAPERCLIP_WORKSPACE_CREATED\" > .paperclip-provision-created",
+        "const fs = require('node:fs');",
+        "fs.writeFileSync('.paperclip-provision-branch', process.env.PAPERCLIP_WORKSPACE_BRANCH + '\\n');",
+        "fs.writeFileSync('.paperclip-provision-base', process.env.PAPERCLIP_WORKSPACE_BASE_CWD + '\\n');",
+        "fs.writeFileSync('.paperclip-provision-created', process.env.PAPERCLIP_WORKSPACE_CREATED + '\\n');",
       ].join("\n"),
       "utf8",
     );
-    await runGit(repoRoot, ["add", "scripts/provision.sh"]);
+    await runGit(repoRoot, ["add", "scripts/provision.js"]);
     await runGit(repoRoot, ["commit", "-m", "Add worktree provision script"]);
 
     const workspace = await realizeExecutionWorkspace({
@@ -277,7 +276,7 @@ describe("realizeExecutionWorkspace", () => {
         workspaceStrategy: {
           type: "git_worktree",
           branchTemplate: "{{issue.identifier}}-{{slug}}",
-          provisionCommand: "bash ./scripts/provision.sh",
+          provisionCommand: "node ./scripts/provision.js",
         },
       },
       issue: {
@@ -315,7 +314,7 @@ describe("realizeExecutionWorkspace", () => {
         workspaceStrategy: {
           type: "git_worktree",
           branchTemplate: "{{issue.identifier}}-{{slug}}",
-          provisionCommand: "bash ./scripts/provision.sh",
+          provisionCommand: "node ./scripts/provision.js",
         },
       },
       issue: {
@@ -489,15 +488,11 @@ describe("realizeExecutionWorkspace", () => {
 
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
     await fs.writeFile(
-      path.join(repoRoot, "scripts", "provision.sh"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        "printf 'provisioned\\n'",
-      ].join("\n"),
+      path.join(repoRoot, "scripts", "provision.js"),
+      "process.stdout.write('provisioned\\n');",
       "utf8",
     );
-    await runGit(repoRoot, ["add", "scripts/provision.sh"]);
+    await runGit(repoRoot, ["add", "scripts/provision.js"]);
     await runGit(repoRoot, ["commit", "-m", "Add recorder provision script"]);
 
     await realizeExecutionWorkspace({
@@ -513,7 +508,7 @@ describe("realizeExecutionWorkspace", () => {
         workspaceStrategy: {
           type: "git_worktree",
           branchTemplate: "{{issue.identifier}}-{{slug}}",
-          provisionCommand: "bash ./scripts/provision.sh",
+          provisionCommand: "node ./scripts/provision.js",
         },
       },
       issue: {
@@ -538,7 +533,7 @@ describe("realizeExecutionWorkspace", () => {
       branchName: "PAP-540-record-workspace-operations",
       created: true,
     });
-    expect(operations[1]?.command).toBe("bash ./scripts/provision.sh");
+    expect(operations[1]?.command).toBe("node ./scripts/provision.js");
   });
 
   it("reuses an existing branch without resetting it when recreating a missing worktree", async () => {
@@ -744,6 +739,8 @@ describe("realizeExecutionWorkspace", () => {
       },
     });
 
+    const cleanupCommand = process.platform === "win32" ? "node -e \"process.stdout.write('cleanup ok\\n')\"" : "printf 'cleanup ok\\n'";
+
     await cleanupExecutionWorkspaceArtifacts({
       workspace: {
         id: "execution-workspace-1",
@@ -762,7 +759,7 @@ describe("realizeExecutionWorkspace", () => {
       },
       projectWorkspace: {
         cwd: repoRoot,
-        cleanupCommand: "printf 'cleanup ok\\n'",
+        cleanupCommand,
       },
       recorder,
     });
@@ -772,7 +769,7 @@ describe("realizeExecutionWorkspace", () => {
       "worktree_cleanup",
       "worktree_cleanup",
     ]);
-    expect(operations[0]?.command).toBe("printf 'cleanup ok\\n'");
+    expect(operations[0]?.command).toBe(cleanupCommand);
     expect(operations[1]?.metadata).toMatchObject({
       cleanupAction: "worktree_remove",
     });
@@ -1106,7 +1103,7 @@ describe("ensureRuntimeServicesForRun", () => {
     });
     await releaseRuntimeServicesForRun(runId);
     leasedRunIds.delete(runId);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 1000 : 250));
 
     await expect(fetch(services[0]!.url!)).rejects.toThrow();
   });
