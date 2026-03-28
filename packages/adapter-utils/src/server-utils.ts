@@ -275,6 +275,56 @@ function quoteForCmd(arg: string) {
   return /[\s"&<>|^()]/.test(escaped) ? `"${escaped}"` : escaped;
 }
 
+/**
+ * Try to extract the Node.js entry-point from an npm/pnpm-generated `.cmd`
+ * shim.  Returns the *resolved* absolute path to the `.js`/`.mjs`/`.cjs`
+ * file, or `null` if the shim doesn't match the expected pattern.
+ *
+ * npm and pnpm `.cmd` shims follow a well-known template:
+ *
+ * ```
+ * @IF EXIST "%~dp0\node.exe" (
+ *   "%~dp0\node.exe"  "%~dp0\node_modules\pkg\entry.js" %*
+ * ) ELSE (
+ *   node  "%~dp0\node_modules\pkg\entry.js" %*
+ * )
+ * ```
+ *
+ * We look for any line containing `node`/`node.exe` followed by a quoted
+ * path ending in `.js`, `.mjs`, or `.cjs`.  The `%~dp0` token is expanded
+ * to the directory containing the `.cmd` file itself.
+ */
+async function tryExtractNodeEntryFromCmd(cmdPath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(cmdPath, "utf8");
+    const cmdDir = path.dirname(cmdPath);
+
+    // Match lines containing node invocations followed by a quoted JS entry path.
+    //
+    // Real-world formats from npm/pnpm .cmd shims:
+    //   node  "%~dp0\node_modules\pkg\entry.js" %*          (unquoted node)
+    //   "%~dp0\node.exe"  "%~dp0\node_modules\pkg\entry.mjs" %*  (quoted node.exe)
+    //   @node "%~dp0script.js" %*                           (test-generated shims)
+    //
+    // The regex captures the quoted JS file path (group 1).
+    const entryPattern = /\bnode(?:\.exe)?"?\s+"([^"]+\.(?:[mc]?js))"/i;
+    for (const line of content.split(/\r?\n/)) {
+      const match = line.match(entryPattern);
+      if (!match) continue;
+
+      const raw = match[1];
+      // Expand the %~dp0 token → directory of the .cmd file
+      const expanded = raw.replace(/%~dp0\\?/gi, `${cmdDir}${path.sep}`);
+      const resolved = path.resolve(expanded);
+
+      if (await pathExists(resolved)) return resolved;
+    }
+  } catch {
+    // Ignore read/parse errors — fall through to cmd.exe approach
+  }
+  return null;
+}
+
 async function resolveSpawnTarget(
   command: string,
   args: string[],
@@ -289,6 +339,16 @@ async function resolveSpawnTarget(
   }
 
   if (/\.(cmd|bat)$/i.test(executable)) {
+    // Prefer bypassing cmd.exe by extracting the Node.js entry-point from
+    // npm/pnpm-generated .cmd shims.  This avoids cmd.exe's inability to
+    // pass arguments containing literal newlines (common in adapter prompts).
+    const nodeEntry = await tryExtractNodeEntryFromCmd(executable);
+    if (nodeEntry) {
+      const nodeExe = process.execPath;
+      return { command: nodeExe, args: [nodeEntry, ...args] };
+    }
+
+    // Fallback: wrap in cmd.exe for non-Node .cmd files
     const shell = env.ComSpec || process.env.ComSpec || "cmd.exe";
     const commandLine = [quoteForCmd(executable), ...args.map(quoteForCmd)].join(" ");
     return {
