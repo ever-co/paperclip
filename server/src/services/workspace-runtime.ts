@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
@@ -233,12 +233,14 @@ async function executeProcess(input: {
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  shell?: boolean;
 }): Promise<{ stdout: string; stderr: string; code: number | null }> {
   const proc = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve, reject) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: input.env ?? process.env,
+      shell: input.shell,
     });
     let stdout = "";
     let stderr = "";
@@ -277,13 +279,19 @@ async function directoryExists(value: string) {
 
 function terminateChildProcess(child: ChildProcess) {
   if (!child.pid) return;
-  if (process.platform !== "win32") {
+  if (process.platform === "win32") {
     try {
-      process.kill(-child.pid, "SIGTERM");
-      return;
+      execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: "ignore" });
     } catch {
-      // Fall through to the direct child kill.
+      // best effort — process may have already exited
     }
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGTERM");
+    return;
+  } catch {
+    // Fall through to the direct child kill.
   }
   if (!child.killed) {
     child.kill("SIGTERM");
@@ -320,6 +328,13 @@ function buildWorkspaceCommandEnv(input: {
   env.PAPERCLIP_ISSUE_TITLE = input.issue?.title ?? "";
   return env;
 }
+function resolveShellArgs(command: string): { command: string; args: string[]; shell: boolean } {
+  if (process.platform === "win32") {
+    return { command, args: [], shell: true };
+  }
+  const shell = process.env.SHELL?.trim() || "/bin/sh";
+  return { command: shell, args: ["-c", command], shell: false };
+}
 
 async function runWorkspaceCommand(input: {
   command: string;
@@ -327,12 +342,13 @@ async function runWorkspaceCommand(input: {
   env: NodeJS.ProcessEnv;
   label: string;
 }) {
-  const shell = process.env.SHELL?.trim() || "/bin/sh";
+  const shell = resolveShellArgs(input.command);
   const proc = await executeProcess({
-    command: shell,
-    args: ["-c", input.command],
+    command: shell.command,
+    args: shell.args,
     cwd: input.cwd,
     env: input.env,
+    shell: shell.shell,
   });
   if (proc.code === 0) return;
 
@@ -423,12 +439,13 @@ async function recordWorkspaceCommandOperation(
     cwd: input.cwd,
     metadata: input.metadata ?? null,
     run: async () => {
-      const shell = process.env.SHELL?.trim() || "/bin/sh";
+      const shell = resolveShellArgs(input.command);
       const result = await executeProcess({
-        command: shell,
-        args: ["-c", input.command],
+        command: shell.command,
+        args: shell.args,
         cwd: input.cwd,
         env: input.env,
+        shell: shell.shell,
       });
       stdout = result.stdout;
       stderr = result.stderr;
@@ -1122,11 +1139,12 @@ async function startLocalRuntimeService(input: {
     const portEnvKey = asString(portConfig.envKey, "PORT");
     env[portEnvKey] = String(port);
   }
-  const shell = process.env.SHELL?.trim() || "/bin/sh";
-  const child = spawn(shell, ["-lc", command], {
+  const shellArgs = resolveShellArgs(command);
+  const child = spawn(shellArgs.command, shellArgs.args, {
     cwd: serviceCwd,
     env,
     detached: process.platform !== "win32",
+    shell: shellArgs.shell,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderrExcerpt = "";
