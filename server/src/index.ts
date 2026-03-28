@@ -263,7 +263,11 @@ export async function startServer(): Promise<StartedServer> {
     | { mode: "external-postgres"; connectionString: string }
     | { mode: "embedded-postgres"; dataDir: string; port: number };
   if (config.databaseUrl) {
-    migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
+    if (process.env.PAPERCLIP_SKIP_MIGRATION_CHECK === "true") {
+      logger.info("Skipping migration check (PAPERCLIP_SKIP_MIGRATION_CHECK=true)");
+    } else {
+      migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
+    }
   
     db = createDb(config.databaseUrl);
     logger.info("Using external PostgreSQL via DATABASE_URL/config");
