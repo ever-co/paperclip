@@ -259,7 +259,9 @@ export function loadConfig(): Config {
     companyDeletionEnabled,
     managedCompanyIds: (() => {
       const raw = process.env.PAPERCLIP_MANAGED_COMPANY_IDS?.trim();
-      return raw ? raw.split(",").map((id) => id.trim()).filter(Boolean) : null;
+      if (!raw) return null;
+      if (raw.toLowerCase() === "none") return [];
+      return raw.split(",").map((id) => id.trim()).filter(Boolean);
     })(),
     serverId: process.env.PAPERCLIP_SERVER_ID?.trim() || null,
   };
