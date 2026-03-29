@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { notFound } from "../errors.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
-/** Maximum bytes of log content to persist in the DB column (5 MB). */
-export const MAX_LOG_DB_BYTES = 5 * 1024 * 1024;
+/** Maximum bytes of log content to persist in the DB column (96 MB). */
+export const MAX_LOG_DB_BYTES = 96 * 1024 * 1024;
 
 export type RunLogStoreType = "local_file";
 
