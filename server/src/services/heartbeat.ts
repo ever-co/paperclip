@@ -30,7 +30,7 @@ import { resolveLocalInstructionsFilePath, ensureLocalManagedInstructions } from
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
-import { isManagedCompany, managedCompanyFilter, getServerId } from "../company-affinity.js";
+import { isManagedCompany, managedCompanyFilter, getServerId, resolveServerIdForCompany } from "../company-affinity.js";
 import { summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
 import {
   buildWorkspaceReadyComment,
@@ -1557,7 +1557,7 @@ export function heartbeatService(db: Db) {
           sessionIdBefore: sessionBefore,
           retryOfRunId: run.id,
           processLossRetryCount: (run.processLossRetryCount ?? 0) + 1,
-          serverId: getServerId(),
+          serverId: await resolveServerIdForCompany(db, run.companyId),
           updatedAt: now,
         })
         .returning()
@@ -2947,7 +2947,7 @@ export function heartbeatService(db: Db) {
             wakeupRequestId: deferred.id,
             contextSnapshot: promotedContextSnapshot,
             sessionIdBefore: sessionBefore,
-            serverId: getServerId(),
+            serverId: await resolveServerIdForCompany(db, deferredAgent.companyId),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -3337,7 +3337,7 @@ export function heartbeatService(db: Db) {
             wakeupRequestId: wakeupRequest.id,
             contextSnapshot: enrichedContextSnapshot,
             sessionIdBefore: sessionBefore,
-            serverId: getServerId(),
+            serverId: await resolveServerIdForCompany(db, agent.companyId),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -3463,7 +3463,7 @@ export function heartbeatService(db: Db) {
         wakeupRequestId: wakeupRequest.id,
         contextSnapshot: enrichedContextSnapshot,
         sessionIdBefore: sessionBefore,
-        serverId: getServerId(),
+        serverId: await resolveServerIdForCompany(db, agent.companyId),
       })
       .returning()
       .then((rows) => rows[0]);
