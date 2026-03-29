@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveServerDevWatchIgnorePaths } from "../src/dev-watch-ignore.ts";
 
-const require = createRequire(import.meta.url);
-const tsxCliPath = require.resolve("tsx/dist/cli.mjs");
+const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
 const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ignoreArgs = resolveServerDevWatchIgnorePaths(serverRoot).flatMap((ignorePath) => ["--exclude", ignorePath]);
 

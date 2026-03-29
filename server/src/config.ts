@@ -73,7 +73,6 @@ export interface Config {
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
-  managedCompanyIds: string[] | null;
   serverId: string | null;
 }
 
@@ -257,12 +256,6 @@ export function loadConfig(): Config {
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
-    managedCompanyIds: (() => {
-      const raw = process.env.PAPERCLIP_MANAGED_COMPANY_IDS?.trim();
-      if (!raw) return null;
-      if (raw.toLowerCase() === "none") return [];
-      return raw.split(",").map((id) => id.trim()).filter(Boolean);
-    })(),
     serverId: process.env.PAPERCLIP_SERVER_ID?.trim() || null,
   };
 }

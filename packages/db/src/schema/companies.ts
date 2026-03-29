@@ -17,6 +17,7 @@ export const companies = pgTable(
       .notNull()
       .default(true),
     brandColor: text("brand_color"),
+    assignedServerId: text("assigned_server_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

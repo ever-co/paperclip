@@ -1,14 +1,14 @@
 import { ChangeEvent, useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
-import { companiesApi } from "../api/companies";
+import { companiesApi, serversApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { assetsApi } from "../api/assets";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
-import { Settings, Check, Download, Upload } from "lucide-react";
+import { Settings, Check, Download, Upload, Server } from "lucide-react";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import {
   Field,
@@ -21,6 +21,129 @@ type AgentSnippetInput = {
   connectionCandidates?: string[] | null;
   testResolutionUrl?: string | null;
 };
+
+function AssignedServerSection({
+  companyId,
+  assignedServerId,
+}: {
+  companyId: string;
+  assignedServerId: string | null;
+}) {
+  const queryClient = useQueryClient();
+  const { pushToast } = useToast();
+  const [open, setOpen] = useState(false);
+
+  const { data: servers } = useQuery({
+    queryKey: ["servers", "list"],
+    queryFn: () => serversApi.list(),
+    staleTime: 30_000,
+  });
+
+  const mutation = useMutation({
+    mutationFn: (newServerId: string | null) =>
+      companiesApi.update(companyId, { assignedServerId: newServerId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      pushToast({ title: "Server assignment updated", tone: "success" });
+      setOpen(false);
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Assigned Server
+      </div>
+      <div className="rounded-md border border-border px-4 py-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Server className="h-3.5 w-3.5 text-muted-foreground" />
+            {assignedServerId ? (
+              <>
+                <span className="text-sm font-mono font-medium">{assignedServerId}</span>
+                {servers && (() => {
+                  const server = servers.find((s) => s.id === assignedServerId);
+                  if (!server) return null;
+                  return (
+                    <span
+                      className={`text-[11px] ${
+                        server.status === "online"
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      ({server.status})
+                    </span>
+                  );
+                })()}
+              </>
+            ) : (
+              <span className="text-sm text-muted-foreground italic">Any server</span>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setOpen(!open)}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Saving…" : "Change"}
+          </Button>
+        </div>
+        {open && servers && servers.length > 0 && (
+          <div className="space-y-1.5 pt-2 border-t border-border">
+            <button
+              type="button"
+              className={`w-full flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors text-left ${
+                assignedServerId === null
+                  ? "border-foreground bg-accent"
+                  : "border-border hover:bg-accent/50"
+              }`}
+              onClick={() => mutation.mutate(null)}
+            >
+              <span className="h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0" />
+              <span>Any server</span>
+              <span className="text-[11px] text-muted-foreground ml-auto">default</span>
+            </button>
+            {servers.map((server) => (
+              <button
+                key={server.id}
+                type="button"
+                className={`w-full flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors text-left ${
+                  assignedServerId === server.id
+                    ? "border-foreground bg-accent"
+                    : "border-border hover:bg-accent/50"
+                }`}
+                onClick={() => mutation.mutate(server.id)}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full shrink-0 ${
+                    server.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"
+                  }`}
+                />
+                <span className="font-mono text-xs">{server.id}</span>
+                <span
+                  className={`text-[11px] ml-auto ${
+                    server.status === "online"
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {server.status}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        {open && (!servers || servers.length === 0) && (
+          <div className="text-xs text-muted-foreground italic pt-2 border-t border-border">
+            No servers registered yet. Start a worker with PAPERCLIP_SERVER_ID to register.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function CompanySettings() {
   const {
@@ -47,6 +170,13 @@ export function CompanySettings() {
     setBrandColor(selectedCompany.brandColor ?? "");
     setLogoUrl(selectedCompany.logoUrl ?? "");
   }, [selectedCompany]);
+
+  const serversQuery = useQuery({
+    queryKey: ["company-servers", selectedCompanyId],
+    queryFn: () => companiesApi.getServers(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    refetchInterval: 30_000,
+  });
 
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
@@ -388,6 +518,67 @@ export function CompanySettings() {
             checked={!!selectedCompany.requireBoardApprovalForNewAgents}
             onChange={(v) => settingsMutation.mutate(v)}
           />
+        </div>
+      </div>
+
+      {/* Assigned Server */}
+      <AssignedServerSection
+        companyId={selectedCompanyId!}
+        assignedServerId={selectedCompany?.assignedServerId ?? null}
+      />
+
+      {/* Heartbeat Server Activity */}
+      <div className="space-y-4">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Server Activity
+        </div>
+        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+          <div className="flex items-center gap-1.5">
+            <Server className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">
+              Servers that have processed heartbeats for this company.
+            </span>
+          </div>
+          {serversQuery.isLoading && (
+            <div className="text-xs text-muted-foreground">Loading...</div>
+          )}
+          {serversQuery.data && serversQuery.data.length === 0 && (
+            <div className="text-xs text-muted-foreground italic">
+              No server activity recorded yet.
+            </div>
+          )}
+          {serversQuery.data && serversQuery.data.length > 0 && (
+            <div className="space-y-2">
+              {serversQuery.data.map((server) => {
+                const lastSeen = new Date(server.lastSeenAt);
+                const ageMs = Date.now() - lastSeen.getTime();
+                const isRecent = ageMs < 5 * 60 * 1000;
+                return (
+                  <div
+                    key={server.serverId}
+                    className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-block h-2 w-2 rounded-full ${
+                          isRecent ? "bg-green-500" : "bg-muted-foreground/40"
+                        }`}
+                      />
+                      <span className="text-sm font-mono font-medium">
+                        {server.serverId}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>{server.runCount} runs</span>
+                      <span title={lastSeen.toISOString()}>
+                        Last seen {lastSeen.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

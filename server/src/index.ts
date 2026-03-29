@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import type { Request as ExpressRequest, RequestHandler } from "express";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   createDb,
   ensurePostgresDatabase,
@@ -22,6 +22,7 @@ import {
   companies,
   companyMemberships,
   instanceUserRoles,
+  serverNodes,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -33,7 +34,7 @@ import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
-import { initCompanyAffinity, getManagedCompanyIds } from "./company-affinity.js";
+import { initCompanyAffinity, getManagedCompanyIds, refreshDynamicAffinity } from "./company-affinity.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -85,11 +86,11 @@ export async function startServer(): Promise<StartedServer> {
   }
 
   // Initialise company affinity filter for multi-server deployments.
-  initCompanyAffinity(config.managedCompanyIds, config.serverId);
-  if (config.managedCompanyIds) {
+  initCompanyAffinity(config.serverId);
+  if (config.serverId) {
     logger.info(
-      { managedCompanyIds: config.managedCompanyIds, serverId: config.serverId },
-      `Company affinity mode: managing ${config.managedCompanyIds.length} company ID(s)`,
+      { serverId: config.serverId },
+      `Company affinity mode: dynamic. Managing companies assigned to server "${config.serverId}".`,
     );
   }
   
@@ -437,23 +438,46 @@ export async function startServer(): Promise<StartedServer> {
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
   
-  // Validate managed company IDs against the database (after migrations).
-  if (config.managedCompanyIds && config.managedCompanyIds.length > 0) {
+
+  // Register this server node in the database for dynamic affinity.
+  if (config.serverId) {
+    const now = new Date();
     try {
-      const existingCompanies = await db
-        .select({ id: companies.id })
-        .from(companies)
-        .where(inArray(companies.id, config.managedCompanyIds));
-      const existingIds = new Set(existingCompanies.map((c) => c.id));
-      const missing = config.managedCompanyIds.filter((id) => !existingIds.has(id));
-      if (missing.length > 0) {
-        logger.warn(
-          { missingCompanyIds: missing },
-          `PAPERCLIP_MANAGED_COMPANY_IDS contains ${missing.length} company ID(s) not found in the database`,
-        );
-      }
+      await (db as any)
+        .insert(serverNodes)
+        .values({
+          id: config.serverId,
+          lastHeartbeatAt: now,
+          metadata: { hostname: (await import("node:os")).hostname() },
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: serverNodes.id,
+          set: {
+            lastHeartbeatAt: now,
+            metadata: { hostname: (await import("node:os")).hostname() },
+            updatedAt: now,
+          },
+        });
+      logger.info({ serverId: config.serverId }, "Registered server node");
     } catch (err) {
-      logger.warn({ err }, "Failed to validate managed company IDs against the database");
+      logger.error({ err, serverId: config.serverId }, "Failed to register server node");
+    }
+
+    // Initialise dynamic affinity from DB.
+    await refreshDynamicAffinity(db as any, config.serverId);
+    const ids = getManagedCompanyIds();
+    if (ids && ids.size > 0) {
+      logger.info(
+        { serverId: config.serverId, companyCount: ids.size },
+        `Dynamic affinity: managing ${ids.size} company ID(s) assigned to this server`,
+      );
+    } else {
+      logger.info(
+        { serverId: config.serverId },
+        "Dynamic affinity: no companies currently assigned to this server",
+      );
     }
   }
 
@@ -640,6 +664,26 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
     }, config.heartbeatSchedulerIntervalMs);
+
+    // Periodic server node heartbeat + dynamic affinity refresh.
+    if (config.serverId) {
+      const serverHeartbeatIntervalMs = 30_000; // 30 seconds
+      setInterval(() => {
+        const now = new Date();
+        void (db as any)
+          .update(serverNodes)
+          .set({ lastHeartbeatAt: now, updatedAt: now })
+          .where(eq(serverNodes.id, config.serverId!))
+          .catch((err: unknown) => {
+            logger.error({ err }, "server node heartbeat update failed");
+          });
+
+        // Refresh dynamic affinity (pick up newly assigned companies).
+        void refreshDynamicAffinity(db as any, config.serverId!).catch((err: unknown) => {
+          logger.error({ err }, "dynamic affinity refresh failed");
+        });
+      }, serverHeartbeatIntervalMs);
+    }
   }
   
   if (config.databaseBackupEnabled) {
@@ -728,7 +772,6 @@ export async function startServer(): Promise<StartedServer> {
         databaseBackupIntervalMinutes: config.databaseBackupIntervalMinutes,
         databaseBackupRetentionDays: config.databaseBackupRetentionDays,
         databaseBackupDir: config.databaseBackupDir,
-        managedCompanyIds: config.managedCompanyIds,
         serverId: config.serverId,
       });
 
