@@ -42,6 +42,7 @@ export function companyService(db: Db) {
     spentMonthlyCents: companies.spentMonthlyCents,
     requireBoardApprovalForNewAgents: companies.requireBoardApprovalForNewAgents,
     brandColor: companies.brandColor,
+    assignedServerId: companies.assignedServerId,
     logoAssetId: companyLogos.assetId,
     createdAt: companies.createdAt,
     updatedAt: companies.updatedAt,
@@ -283,6 +284,25 @@ export function companyService(db: Db) {
           .returning();
         return rows[0] ?? null;
       }),
+
+    getServers: async (companyId: string) => {
+      const rows = await db
+        .select({
+          serverId: heartbeatRuns.serverId,
+          lastSeenAt: sql<string>`max(${heartbeatRuns.createdAt})`,
+          runCount: sql<number>`count(*)::int`,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            sql`${heartbeatRuns.serverId} IS NOT NULL`,
+          ),
+        )
+        .groupBy(heartbeatRuns.serverId)
+        .orderBy(sql`max(${heartbeatRuns.createdAt}) DESC`);
+      return rows as { serverId: string; lastSeenAt: string; runCount: number }[];
+    },
 
     stats: () =>
       Promise.all([

@@ -448,3 +448,120 @@ Networking behavior for this smoke script:
 - auto-detects and prints a Paperclip host URL reachable from inside OpenClaw Docker
 - default container-side host alias is `host.docker.internal` (override with `PAPERCLIP_HOST_FROM_CONTAINER` / `PAPERCLIP_HOST_PORT`)
 - if Paperclip rejects container hostnames in authenticated/private mode, allow `host.docker.internal` via `pnpm paperclipai allowed-hostname host.docker.internal` and restart Paperclip
+
+## Multi-Server Deployment (Server Affinity)
+
+Paperclip supports running multiple server instances against a single shared
+PostgreSQL database. Each instance manages background work (heartbeat
+scheduler, routine scheduler, orphan reaper) for companies assigned to it,
+while API routes remain globally accessible from any instance.
+
+> **Fully optional.** When `PAPERCLIP_SERVER_ID` is not set, the server
+> manages all companies automatically — identical to a single-server
+> deployment. No configuration changes are needed for existing setups.
+
+### Architecture
+
+```
+ ┌──── Worker-A (.env) ──────┐     ┌──── Worker-B (.env) ──────┐
+ │ SERVER_ID=worker-a         │     │ SERVER_ID=worker-b         │
+ │ DATABASE_URL=shared        │     │ DATABASE_URL=shared        │
+ └────────┬───────────────────┘     └────────┬───────────────────┘
+          │                                  │
+          └──────────┬───────────────────────┘
+                     ▼
+             ┌──────────────┐
+             │ Shared       │
+             │ PostgreSQL   │
+             └──────────────┘
+```
+
+Companies are assigned to servers **via the UI** (during company creation or in
+Company Settings), not through environment variables.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | Connection string to the shared PostgreSQL instance |
+| `PAPERCLIP_SERVER_ID` | No | — | Unique identifier for this server instance. Used for server registration, company affinity, and orphan reaper scoping. |
+| `SERVE_UI` | No | `true` | Set to `false` on headless worker nodes that should not serve the board UI. |
+
+### Setup Steps
+
+1. **Provision a shared PostgreSQL database.** Any PostgreSQL 14+ instance
+   reachable from all servers will work (Supabase, Docker, managed cloud).
+
+2. **Configure each server's `.env` file:**
+
+   ```env
+   # --- Worker-A ---
+   DATABASE_URL=postgres://user:pass@db-host:5432/paperclip
+   PAPERCLIP_SERVER_ID=worker-a
+   # Optional: disable UI on worker-only nodes
+   # SERVE_UI=false
+   ```
+
+   ```env
+   # --- Worker-B ---
+   DATABASE_URL=postgres://user:pass@db-host:5432/paperclip
+   PAPERCLIP_SERVER_ID=worker-b
+   ```
+
+3. **Start each server normally** (`pnpm dev`, `npx paperclipai`, etc.).
+   Each server registers itself in the `server_nodes` table on startup and
+   sends periodic heartbeats every 30 seconds.
+
+4. **Assign companies to servers via the UI:**
+   - When creating a new company in the onboarding wizard, a server selection
+     dropdown appears if any servers are registered.
+   - In Company Settings, click "Change" next to "Assigned Server" to
+     reassign a company to a different worker.
+   - The Companies list page shows a server badge for assigned companies.
+   - Workers pick up newly assigned companies within 30 seconds — no restart
+     needed.
+
+### Behaviour Details
+
+- **Background schedulers** (heartbeat timer, routine cron, orphan reaper,
+  queued-run resumption, runtime service reconciliation) only process
+  companies assigned to the server's `PAPERCLIP_SERVER_ID`.
+
+- **Unassigned companies** (where `assigned_server_id` is `NULL`) are not
+  managed by any specific server when `PAPERCLIP_SERVER_ID` is set. Use the
+  UI to assign them, or leave `PAPERCLIP_SERVER_ID` unset on one server to
+  act as a catch-all.
+
+- **API routes are unfiltered.** Any server can create/read/update data for
+  all companies. A wakeup triggered on a non-managing server writes the run
+  to the shared DB; the managing server picks it up on its next 30-second
+  scheduler tick.
+
+- **Orphan reaper safety.** When `PAPERCLIP_SERVER_ID` is set, each server's
+  orphan reaper only considers runs tagged with its own `server_id` (plus
+  legacy `NULL` server_id runs). This prevents Server A from reaping runs
+  that Server B is actively executing.
+
+- **Server health.** `GET /api/servers` returns all registered server nodes
+  with online/offline status (based on 2-minute heartbeat staleness).
+  `GET /api/health` includes the responding server's `serverId`.
+
+### Operational Notes
+
+- **Assign each company to exactly one server.** If two servers manage the
+  same company, duplicate heartbeat ticks and routine triggers will fire.
+  There is no distributed lock — the operator is responsible for
+  non-overlapping assignments.
+
+- **Cross-server latency.** When a user triggers a wakeup from the UI
+  served by a non-managing server, the run is enqueued in the shared DB.
+  The managing server picks it up on its next scheduler tick (~30 s).
+
+- **File systems are independent.** Each server uses its own local workspace
+  directories, logs, and storage. Agent adapters run as local processes on
+  the server that manages the company.
+
+- **Mixed OS deployments** are supported. Each server can run on a different
+  OS (Windows, macOS, Linux) as long as it can connect to the shared
+  PostgreSQL database and run compatible agent adapters.
+

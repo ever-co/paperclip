@@ -4,6 +4,9 @@ import { createHash } from "node:crypto";
 import { notFound } from "../errors.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
+/** Maximum bytes of log content to persist in the DB column (5 MB). */
+export const MAX_LOG_DB_BYTES = 5 * 1024 * 1024;
+
 export type RunLogStoreType = "local_file";
 
 export interface RunLogHandle {
@@ -35,6 +38,8 @@ export interface RunLogStore {
   ): Promise<void>;
   finalize(handle: RunLogHandle): Promise<RunLogFinalizeSummary>;
   read(handle: RunLogHandle, opts?: RunLogReadOptions): Promise<RunLogReadResult>;
+  /** Read the entire log content for DB persistence. Returns null if the file doesn't exist. */
+  readAll(handle: RunLogHandle): Promise<string | null>;
 }
 
 function safeSegments(...segments: string[]) {
@@ -141,6 +146,25 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       const offset = opts?.offset ?? 0;
       const limitBytes = opts?.limitBytes ?? 256_000;
       return readFileRange(absPath, offset, limitBytes);
+    },
+
+    async readAll(handle) {
+      if (handle.store !== "local_file") return null;
+      const absPath = resolveWithin(basePath, handle.logRef);
+      const stat = await fs.stat(absPath).catch(() => null);
+      if (!stat || stat.size === 0) return null;
+      // Cap at MAX_LOG_DB_BYTES to avoid storing excessively large logs in the DB.
+      if (stat.size > MAX_LOG_DB_BYTES) {
+        const buffer = Buffer.alloc(MAX_LOG_DB_BYTES);
+        const fd = await fs.open(absPath, "r");
+        try {
+          await fd.read(buffer, 0, MAX_LOG_DB_BYTES, 0);
+        } finally {
+          await fd.close();
+        }
+        return buffer.toString("utf8");
+      }
+      return fs.readFile(absPath, "utf8");
     },
   };
 }

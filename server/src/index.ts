@@ -22,6 +22,7 @@ import {
   companies,
   companyMemberships,
   instanceUserRoles,
+  serverNodes,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -33,6 +34,7 @@ import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
+import { initCompanyAffinity, getManagedCompanyIds, refreshDynamicAffinity, refreshUnassignedAffinity } from "./company-affinity.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -81,6 +83,15 @@ export async function startServer(): Promise<StartedServer> {
   }
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
     process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
+  }
+
+  // Initialise company affinity filter for multi-server deployments.
+  initCompanyAffinity(config.serverId);
+  if (config.serverId) {
+    logger.info(
+      { serverId: config.serverId },
+      `Company affinity mode: dynamic. Managing companies assigned to server "${config.serverId}".`,
+    );
   }
   
   type MigrationSummary =
@@ -253,7 +264,11 @@ export async function startServer(): Promise<StartedServer> {
     | { mode: "external-postgres"; connectionString: string }
     | { mode: "embedded-postgres"; dataDir: string; port: number };
   if (config.databaseUrl) {
-    migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
+    if (process.env.PAPERCLIP_SKIP_MIGRATION_CHECK === "true") {
+      logger.info("Skipping migration check (PAPERCLIP_SKIP_MIGRATION_CHECK=true)");
+    } else {
+      migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
+    }
   
     db = createDb(config.databaseUrl);
     logger.info("Using external PostgreSQL via DATABASE_URL/config");
@@ -423,6 +438,58 @@ export async function startServer(): Promise<StartedServer> {
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
   
+
+  // Register this server node in the database for dynamic affinity.
+  if (config.serverId) {
+    const now = new Date();
+    try {
+      await (db as any)
+        .insert(serverNodes)
+        .values({
+          id: config.serverId,
+          lastHeartbeatAt: now,
+          metadata: { hostname: (await import("node:os")).hostname() },
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: serverNodes.id,
+          set: {
+            lastHeartbeatAt: now,
+            metadata: { hostname: (await import("node:os")).hostname() },
+            updatedAt: now,
+          },
+        });
+      logger.info({ serverId: config.serverId }, "Registered server node");
+    } catch (err) {
+      logger.error({ err, serverId: config.serverId }, "Failed to register server node");
+    }
+
+    // Initialise dynamic affinity from DB.
+    await refreshDynamicAffinity(db as any, config.serverId);
+    const ids = getManagedCompanyIds();
+    if (ids && ids.size > 0) {
+      logger.info(
+        { serverId: config.serverId, companyCount: ids.size },
+        `Dynamic affinity: managing ${ids.size} company ID(s) assigned to this server`,
+      );
+    } else {
+      logger.info(
+        { serverId: config.serverId },
+        "Dynamic affinity: no companies currently assigned to this server",
+      );
+    }
+  } else {
+    // No server ID — manage only unassigned companies.
+    // Refresh so we don't accidentally manage companies assigned to other servers.
+    await refreshUnassignedAffinity(db as any);
+    const ids = getManagedCompanyIds();
+    logger.info(
+      { companyCount: ids?.size ?? 0 },
+      `No server ID: managing ${ids?.size ?? 0} unassigned company ID(s)`,
+    );
+  }
+
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(
       `local_trusted mode requires loopback host binding (received: ${config.host}). ` +
@@ -606,6 +673,35 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
     }, config.heartbeatSchedulerIntervalMs);
+
+    // Periodic server node heartbeat + dynamic affinity refresh.
+    if (config.serverId) {
+      const serverHeartbeatIntervalMs = 30_000; // 30 seconds
+      setInterval(() => {
+        const now = new Date();
+        void (db as any)
+          .update(serverNodes)
+          .set({ lastHeartbeatAt: now, updatedAt: now })
+          .where(eq(serverNodes.id, config.serverId!))
+          .catch((err: unknown) => {
+            logger.error({ err }, "server node heartbeat update failed");
+          });
+
+        // Refresh dynamic affinity (pick up newly assigned companies).
+        void refreshDynamicAffinity(db as any, config.serverId!).catch((err: unknown) => {
+          logger.error({ err }, "dynamic affinity refresh failed");
+        });
+      }, serverHeartbeatIntervalMs);
+    } else {
+      // No server ID — periodically refresh unassigned company set so we
+      // stop managing companies that get assigned to dedicated workers.
+      const unassignedRefreshMs = 30_000;
+      setInterval(() => {
+        void refreshUnassignedAffinity(db as any).catch((err: unknown) => {
+          logger.error({ err }, "unassigned affinity refresh failed");
+        });
+      }, unassignedRefreshMs);
+    }
   }
   
   if (config.databaseBackupEnabled) {
@@ -694,6 +790,7 @@ export async function startServer(): Promise<StartedServer> {
         databaseBackupIntervalMinutes: config.databaseBackupIntervalMinutes,
         databaseBackupRetentionDays: config.databaseBackupRetentionDays,
         databaseBackupDir: config.databaseBackupDir,
+        serverId: config.serverId,
       });
 
       const boardClaimUrl = getBoardClaimWarningUrl(config.host, listenPort);
