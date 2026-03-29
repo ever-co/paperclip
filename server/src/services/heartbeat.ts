@@ -2706,8 +2706,11 @@ export function heartbeatService(db: Db) {
       }
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
+      let logContentForDb: string | null = null;
       if (handle) {
         logSummary = await runLogStore.finalize(handle);
+        // Read the full log content for DB persistence (cross-server access).
+        logContentForDb = await runLogStore.readAll(handle);
       }
 
       const status =
@@ -2772,6 +2775,7 @@ export function heartbeatService(db: Db) {
         logBytes: logSummary?.bytes,
         logSha256: logSummary?.sha256,
         logCompressed: logSummary?.compressed ?? false,
+        logContentDb: logContentForDb,
       });
 
       await setWakeupStatus(run.wakeupRequestId, outcome === "succeeded" ? "completed" : status, {
@@ -2827,9 +2831,11 @@ export function heartbeatService(db: Db) {
       logger.error({ err, runId }, "heartbeat execution failed");
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
+      let logContentForDbErr: string | null = null;
       if (handle) {
         try {
           logSummary = await runLogStore.finalize(handle);
+          logContentForDbErr = await runLogStore.readAll(handle);
         } catch (finalizeErr) {
           logger.warn({ err: finalizeErr, runId }, "failed to finalize run log after error");
         }
@@ -2844,6 +2850,7 @@ export function heartbeatService(db: Db) {
         logBytes: logSummary?.bytes,
         logSha256: logSummary?.sha256,
         logCompressed: logSummary?.compressed ?? false,
+        logContentDb: logContentForDbErr,
       });
       await setWakeupStatus(run.wakeupRequestId, "failed", {
         finishedAt: new Date(),
@@ -3870,21 +3877,45 @@ export function heartbeatService(db: Db) {
       if (!run) throw notFound("Heartbeat run not found");
       if (!run.logStore || !run.logRef) throw notFound("Run log not found");
 
-      const result = await runLogStore.read(
-        {
-          store: run.logStore as "local_file",
-          logRef: run.logRef,
-        },
-        opts,
-      );
+      try {
+        const result = await runLogStore.read(
+          {
+            store: run.logStore as "local_file",
+            logRef: run.logRef,
+          },
+          opts,
+        );
 
-      return {
-        runId,
-        store: run.logStore,
-        logRef: run.logRef,
-        ...result,
-        content: redactCurrentUserText(result.content, await getCurrentUserRedactionOptions()),
-      };
+        return {
+          runId,
+          store: run.logStore,
+          logRef: run.logRef,
+          ...result,
+          content: redactCurrentUserText(result.content, await getCurrentUserRedactionOptions()),
+        };
+      } catch {
+        // Local file not found — fall back to DB-stored log content (cross-server).
+        const [dbRow] = await db
+          .select({ logContentDb: heartbeatRuns.logContentDb })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, runId))
+          .limit(1);
+        const dbContent = dbRow?.logContentDb;
+        if (dbContent) {
+          const offset = opts?.offset ?? 0;
+          const limitBytes = opts?.limitBytes ?? 256_000;
+          const slice = dbContent.slice(offset, offset + limitBytes);
+          const nextOffset = offset + limitBytes < dbContent.length ? offset + limitBytes : undefined;
+          return {
+            runId,
+            store: "db",
+            logRef: run.logRef,
+            content: redactCurrentUserText(slice, await getCurrentUserRedactionOptions()),
+            nextOffset,
+          };
+        }
+        throw notFound("Run log not found");
+      }
     },
 
     invoke: async (
