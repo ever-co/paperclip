@@ -34,7 +34,7 @@ import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
-import { initCompanyAffinity, getManagedCompanyIds, refreshDynamicAffinity } from "./company-affinity.js";
+import { initCompanyAffinity, getManagedCompanyIds, refreshDynamicAffinity, refreshUnassignedAffinity } from "./company-affinity.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -479,6 +479,15 @@ export async function startServer(): Promise<StartedServer> {
         "Dynamic affinity: no companies currently assigned to this server",
       );
     }
+  } else {
+    // No server ID — manage only unassigned companies.
+    // Refresh so we don't accidentally manage companies assigned to other servers.
+    await refreshUnassignedAffinity(db as any);
+    const ids = getManagedCompanyIds();
+    logger.info(
+      { companyCount: ids?.size ?? 0 },
+      `No server ID: managing ${ids?.size ?? 0} unassigned company ID(s)`,
+    );
   }
 
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
@@ -683,6 +692,15 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "dynamic affinity refresh failed");
         });
       }, serverHeartbeatIntervalMs);
+    } else {
+      // No server ID — periodically refresh unassigned company set so we
+      // stop managing companies that get assigned to dedicated workers.
+      const unassignedRefreshMs = 30_000;
+      setInterval(() => {
+        void refreshUnassignedAffinity(db as any).catch((err: unknown) => {
+          logger.error({ err }, "unassigned affinity refresh failed");
+        });
+      }, unassignedRefreshMs);
     }
   }
   

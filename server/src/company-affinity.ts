@@ -1,4 +1,4 @@
-import { eq, inArray, sql, type SQL } from "drizzle-orm";
+import { eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { companies } from "@paperclipai/db";
 import type { Db } from "@paperclipai/db";
@@ -11,23 +11,28 @@ import type { Db } from "@paperclipai/db";
  * managed set periodically.
  *
  * When `PAPERCLIP_SERVER_ID` is NOT set (single-server default), the server
- * manages ALL companies — no filtering is applied.
+ * manages only companies that have NO `assigned_server_id` set (unassigned).
+ * This prevents a headless server from stealing work from dedicated workers.
  *
  * API routes remain unfiltered — any server can read/write any company's data.
  */
 let managedCompanyIds: Set<string> | null = null;
 let serverId: string | null = null;
+let affinityInitialized = false;
 
 /** Initialise the affinity state from config. Call once at startup. */
 export function initCompanyAffinity(serverIdValue: string | null): void {
   serverId = serverIdValue;
-  // When no serverId is set, managedCompanyIds stays null → manage all.
+  affinityInitialized = true;
+  // managedCompanyIds stays null until first refreshDynamicAffinity call.
 }
 
 /**
  * Refresh the dynamic affinity set from the database.
- * Queries `companies WHERE assigned_server_id = serverId` and updates the
- * in-memory managed set. Called periodically by the scheduler.
+ *
+ * When `serverIdValue` is provided, queries companies assigned to that server.
+ * When called without a serverIdValue (for unassigned-mode), queries companies
+ * with `assigned_server_id IS NULL`.
  */
 export async function refreshDynamicAffinity(
   db: Db,
@@ -40,7 +45,19 @@ export async function refreshDynamicAffinity(
   managedCompanyIds = new Set(rows.map((r) => r.id));
 }
 
-/** Returns the set of managed company IDs, or `null` when managing all. */
+/**
+ * Refresh affinity for an unassigned (no server ID) server.
+ * Queries companies with `assigned_server_id IS NULL`.
+ */
+export async function refreshUnassignedAffinity(db: Db): Promise<void> {
+  const rows = await db
+    .select({ id: companies.id })
+    .from(companies)
+    .where(isNull(companies.assignedServerId));
+  managedCompanyIds = new Set(rows.map((r) => r.id));
+}
+
+/** Returns the set of managed company IDs, or `null` when not yet refreshed. */
 export function getManagedCompanyIds(): Set<string> | null {
   return managedCompanyIds;
 }
@@ -52,7 +69,10 @@ export function getServerId(): string | null {
 
 /**
  * Returns `true` if this server should manage background work for `companyId`.
- * When affinity is not configured, returns `true` for every company.
+ *
+ * Before the first affinity refresh, returns `true` for every company so that
+ * single-server setups (no DB refresh cycle) continue to work. After the first
+ * refresh, strictly checks the managed set.
  */
 export function isManagedCompany(companyId: string): boolean {
   if (managedCompanyIds === null) return true;
@@ -62,7 +82,7 @@ export function isManagedCompany(companyId: string): boolean {
 /**
  * Returns a Drizzle SQL condition that restricts a query to managed companies.
  *
- * When affinity is not configured (manage all), returns `undefined` so callers
+ * When affinity has not been refreshed yet, returns `undefined` so callers
  * can safely spread it into an `and(...)` without effect.
  */
 export function managedCompanyFilter(
@@ -73,3 +93,4 @@ export function managedCompanyFilter(
   if (ids.length === 0) return sql`false`;
   return inArray(companyIdColumn, ids);
 }
+
