@@ -158,6 +158,11 @@ export function OnboardingWizard() {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const [routeDismissed, setRouteDismissed] = useState(false);
 
+  // Guard: once the user manually advances past step 1 (by creating a company),
+  // the sync-with-options useEffect must not reset the step back.  This ref is
+  // cleared when the wizard is reset/closed.
+  const userAdvancedRef = useRef(false);
+
   const routeOnboardingOptions =
     companyPrefix && companiesLoading
       ? null
@@ -242,6 +247,10 @@ export function OnboardingWizard() {
   // doesn't get reset after creating a company.
   useEffect(() => {
     if (!effectiveOnboardingOpen) return;
+    // If the user has already advanced past step 1 by creating a company,
+    // don't let a re-render of `effectiveOnboardingOptions` (caused by the
+    // company-list refetch) reset the wizard back to step 1.
+    if (userAdvancedRef.current) return;
     const cId = effectiveOnboardingOptions.companyId ?? null;
     setStep(effectiveOnboardingOptions.initialStep ?? 1);
     setCreatedCompanyId(cId);
@@ -382,6 +391,7 @@ export function OnboardingWizard() {
     setCreatedProjectId(null);
     setCreatedIssueRef(null);
     setSelectedServerId(null);
+    userAdvancedRef.current = false;
   }
 
   function handleClose() {
@@ -487,6 +497,7 @@ export function OnboardingWizard() {
         setCreatedCompanyGoalId(null);
       }
 
+      userAdvancedRef.current = true;
       setStep(2);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create company");
@@ -533,7 +544,10 @@ export function OnboardingWizard() {
         }
       }
 
-      if (isLocalAdapter) {
+      // For local adapters, run the env test unless the company is assigned to
+      // a remote server (the test would probe the *current* server, not the
+      // target, so the result would be misleading).
+      if (isLocalAdapter && !selectedServerId) {
         const result = adapterEnvResult ?? (await runAdapterEnvironmentTest());
         if (!result) return;
       }
@@ -1097,6 +1111,22 @@ export function OnboardingWizard() {
                           </PopoverContent>
                         </Popover>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Remote-server warning for local adapters */}
+                  {isLocalAdapter && selectedServerId && (
+                    <div className="rounded-md border border-amber-300/60 dark:border-amber-500/30 bg-amber-50/40 dark:bg-amber-500/10 px-3 py-2.5 space-y-1">
+                      <p className="text-xs font-medium text-amber-900/90 dark:text-amber-300 flex items-center gap-1.5">
+                        <Server className="h-3.5 w-3.5 shrink-0" />
+                        Running on remote server
+                      </p>
+                      <p className="text-[11px] text-amber-800/70 dark:text-amber-400/80 leading-relaxed">
+                        This company is assigned to server{" "}
+                        <span className="font-mono">{selectedServerId}</span>.
+                        The adapter CLI must be installed on that server.
+                        The environment test below probes this machine, not the target.
+                      </p>
                     </div>
                   )}
 
