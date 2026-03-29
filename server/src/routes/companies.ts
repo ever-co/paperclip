@@ -20,6 +20,7 @@ import {
 } from "../services/index.js";
 import type { StorageService } from "../storage/types.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { getServerId, refreshDynamicAffinity, refreshUnassignedAffinity } from "../company-affinity.js";
 
 export function companyRoutes(db: Db, storage?: StorageService) {
   const router = Router();
@@ -215,7 +216,11 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     if (!(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
       throw forbidden("Instance admin required");
     }
-    const company = await svc.create(req.body);
+    const serverId = getServerId();
+    const company = await svc.create({
+      ...req.body,
+      ...(serverId ? { assignedServerId: serverId } : {}),
+    });
     await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "owner", "active");
     await logActivity(db, {
       companyId: company.id,
@@ -237,6 +242,11 @@ export function companyRoutes(db: Db, storage?: StorageService) {
         },
         req.actor.userId ?? "board",
       );
+    }
+    if (serverId) {
+      void refreshDynamicAffinity(db, serverId).catch(() => {});
+    } else {
+      void refreshUnassignedAffinity(db).catch(() => {});
     }
     res.status(201).json(company);
   });
