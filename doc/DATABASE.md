@@ -170,14 +170,16 @@ pnpm secrets:migrate-inline-env --apply
 ## Shared Database (Multi-Server)
 
 Multiple Paperclip server instances can point to the same external PostgreSQL
-database. Each server uses environment variables to scope which companies it
-manages for background processing:
+database. Each server sets `PAPERCLIP_SERVER_ID` in its `.env` to identify
+itself, and companies are assigned to specific servers via the UI.
 
-- `PAPERCLIP_MANAGED_COMPANY_IDS` — comma-separated company UUIDs
-- `PAPERCLIP_SERVER_ID` — unique per-server identifier for run ownership
+- `PAPERCLIP_SERVER_ID` — unique per-server identifier for run ownership and
+  company affinity
+- Companies are assigned via `assigned_server_id` in the `companies` table,
+  managed through the board UI
 
-Migrations are idempotent and can safely be applied by any server on startup.
-The `heartbeat_runs` table includes a nullable `server_id` column used by the
-orphan reaper to avoid cross-server interference.
+When `PAPERCLIP_SERVER_ID` is not set, the server manages all companies
+(single-server default). Migrations are idempotent and can safely be applied
+by any server on startup.
 
 See **doc/DEVELOPING.md § Multi-Server Deployment** for the full setup guide.
