@@ -94,3 +94,23 @@ export function managedCompanyFilter(
   return inArray(companyIdColumn, ids);
 }
 
+/**
+ * Resolve the correct `server_id` to stamp on a heartbeat run for a company.
+ *
+ * In multi-server deployments, a run may be enqueued via API on the main server
+ * but should execute on a dedicated worker node. The `server_id` on the run
+ * should reflect the company's `assigned_server_id` so the correct server
+ * picks it up. Falls back to `getServerId()` for unassigned companies.
+ */
+export async function resolveServerIdForCompany(
+  db: Db,
+  companyId: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ assignedServerId: companies.assignedServerId })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+  return row?.assignedServerId ?? getServerId();
+}
+
