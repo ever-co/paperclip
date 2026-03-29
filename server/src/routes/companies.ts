@@ -338,5 +338,12 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     res.json({ ok: true });
   });
 
+  router.get("/:companyId/servers", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const servers = await svc.getServers(companyId);
+    res.json(servers);
+  });
+
   return router;
 }

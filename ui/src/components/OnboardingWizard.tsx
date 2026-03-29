@@ -4,7 +4,7 @@ import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { useLocation, useNavigate, useParams } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
-import { companiesApi } from "../api/companies";
+import { companiesApi, serversApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
 import { issuesApi } from "../api/issues";
@@ -54,7 +54,8 @@ import {
   Check,
   Loader2,
   ChevronDown,
-  X
+  X,
+  Server
 } from "lucide-react";
 import { HermesIcon } from "./HermesIcon";
 
@@ -75,6 +76,78 @@ const DEFAULT_TASK_DESCRIPTION = `You are the CEO. You set the direction for the
 - hire a founding engineer
 - write a hiring plan
 - break the roadmap into concrete tasks and start delegating work`;
+
+function ServerSelectionField({
+  selectedServerId,
+  onSelect,
+}: {
+  selectedServerId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const { data: servers, isLoading } = useQuery({
+    queryKey: ["servers", "list"],
+    queryFn: () => serversApi.list(),
+    staleTime: 30_000,
+  });
+
+  if (isLoading || !servers || servers.length === 0) return null;
+
+  return (
+    <div className="group">
+      <label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1.5 block">
+        <Server className="h-3 w-3" />
+        Assign to server
+      </label>
+      <div className="space-y-1.5">
+        <button
+          type="button"
+          className={cn(
+            "w-full flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors text-left",
+            selectedServerId === null
+              ? "border-foreground bg-accent"
+              : "border-border hover:bg-accent/50"
+          )}
+          onClick={() => onSelect(null)}
+        >
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0" />
+          <span>Any server</span>
+          <span className="text-[11px] text-muted-foreground ml-auto">default</span>
+        </button>
+        {servers.map((server) => (
+          <button
+            key={server.id}
+            type="button"
+            className={cn(
+              "w-full flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors text-left",
+              selectedServerId === server.id
+                ? "border-foreground bg-accent"
+                : "border-border hover:bg-accent/50"
+            )}
+            onClick={() => onSelect(server.id)}
+          >
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full shrink-0",
+                server.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"
+              )}
+            />
+            <span className="font-mono text-xs">{server.id}</span>
+            <span
+              className={cn(
+                "text-[11px] ml-auto",
+                server.status === "online"
+                  ? "text-green-600 dark:text-green-400"
+                  : "text-muted-foreground"
+              )}
+            >
+              {server.status}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
@@ -111,6 +184,7 @@ export function OnboardingWizard() {
   // Step 1
   const [companyName, setCompanyName] = useState("");
   const [companyGoal, setCompanyGoal] = useState("");
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
   // Step 2
   const [agentName, setAgentName] = useState("CEO");
@@ -307,6 +381,7 @@ export function OnboardingWizard() {
     setCreatedAgentId(null);
     setCreatedProjectId(null);
     setCreatedIssueRef(null);
+    setSelectedServerId(null);
   }
 
   function handleClose() {
@@ -385,7 +460,10 @@ export function OnboardingWizard() {
     setLoading(true);
     setError(null);
     try {
-      const company = await companiesApi.create({ name: companyName.trim() });
+      const company = await companiesApi.create({
+        name: companyName.trim(),
+        ...(selectedServerId ? { assignedServerId: selectedServerId } : {}),
+      });
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
@@ -724,6 +802,10 @@ export function OnboardingWizard() {
                       onChange={(e) => setCompanyGoal(e.target.value)}
                     />
                   </div>
+                  <ServerSelectionField
+                    selectedServerId={selectedServerId}
+                    onSelect={setSelectedServerId}
+                  />
                 </div>
               )}
 

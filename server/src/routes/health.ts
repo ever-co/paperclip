@@ -6,6 +6,7 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-server-status.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { serverVersion } from "../version.js";
+import { getServerId } from "../company-affinity.js";
 
 export function healthRoutes(
   db?: Db,
@@ -77,6 +78,7 @@ export function healthRoutes(
     res.json({
       status: "ok",
       version: serverVersion,
+      serverId: getServerId(),
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
       authReady: opts.authReady,
