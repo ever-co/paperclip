@@ -2126,23 +2126,6 @@ export function heartbeatService(db: Db) {
       mode: executionWorkspaceMode,
       legacyUseProjectWorkspace: issueAssigneeOverrides?.useProjectWorkspace ?? null,
     });
-<<<<<<< HEAD
-=======
-    const mergedConfig = issueAssigneeOverrides?.adapterConfig
-      ? { ...workspaceManagedConfig, ...issueAssigneeOverrides.adapterConfig }
-      : workspaceManagedConfig;
-    const { config: resolvedConfig, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
-      agent.companyId,
-      mergedConfig,
-    );
-    const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
-    const runtimeConfig = resolveLocalInstructionsFilePath(agent, {
-      ...resolvedConfig,
-      paperclipRuntimeSkills: runtimeSkillEntries,
-    });
-    // Ensure managed instructions directory exists on this server node.
-    await ensureLocalManagedInstructions(agent, runtimeConfig);
->>>>>>> 549d0d02 (fix: resolve agent instructions path locally for multi-server deployments)
     const issueRef = issueContext
       ? {
           id: issueContext.id,
@@ -2171,10 +2154,12 @@ export function heartbeatService(db: Db) {
       executionRunConfig,
     );
     const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
-    const runtimeConfig = {
+    const runtimeConfig = resolveLocalInstructionsFilePath(agent, {
       ...resolvedConfig,
       paperclipRuntimeSkills: runtimeSkillEntries,
-    };
+    });
+    // Ensure managed instructions directory exists on this server node.
+    await ensureLocalManagedInstructions(agent, runtimeConfig);
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
       companyId: agent.companyId,
       heartbeatRunId: run.id,

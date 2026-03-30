@@ -29,7 +29,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
-import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
+import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService, fileOperationQueueService } from "./services/index.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -632,6 +632,7 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
+    const fileOps = fileOperationQueueService(db as any);
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -671,6 +672,25 @@ export async function startServer(): Promise<StartedServer> {
         .then(() => heartbeat.resumeQueuedRuns())
         .catch((err) => {
           logger.error({ err }, "periodic heartbeat recovery failed");
+        });
+
+      // Tick pending file operations for companies managed by this server.
+      void fileOps
+        .tickPendingFileOperations()
+        .then((result) => {
+          if (result.executed > 0) {
+            logger.info({ executed: result.executed }, "file operation tick executed ops");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "file operation tick failed");
+        });
+
+      // Periodically clean up completed/failed file operations older than 1 hour.
+      void fileOps
+        .cleanupStaleOperations()
+        .catch((err) => {
+          logger.error({ err }, "file operation cleanup failed");
         });
     }, config.heartbeatSchedulerIntervalMs);
 

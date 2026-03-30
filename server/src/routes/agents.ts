@@ -43,6 +43,7 @@ import {
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
 } from "../services/index.js";
+import { isLocalFileOperation, dispatchFileOperation } from "../services/file-operation-queue.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { findServerAdapter, listAdapterModels, detectAdapterModel } from "../adapters/index.js";
@@ -1562,6 +1563,15 @@ export function agentRoutes(db: Db) {
       return;
     }
     await assertCanReadAgent(req, existing);
+
+    if (!isLocalFileOperation(existing.companyId)) {
+      const result = await dispatchFileOperation(db, existing.companyId, "get_bundle", "agent_instructions", {
+        agent: { id: existing.id, companyId: existing.companyId, name: existing.name, adapterConfig: existing.adapterConfig },
+      });
+      res.json(result.bundle);
+      return;
+    }
+
     res.json(await instructions.getBundle(existing));
   });
 
@@ -1575,7 +1585,21 @@ export function agentRoutes(db: Db) {
     await assertCanManageInstructionsPath(req, existing);
 
     const actor = getActorInfo(req);
-    const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
+
+    let bundle: any;
+    let adapterConfig: Record<string, unknown>;
+    if (!isLocalFileOperation(existing.companyId)) {
+      const result = await dispatchFileOperation(db, existing.companyId, "update_bundle", "agent_instructions", {
+        agent: { id: existing.id, companyId: existing.companyId, name: existing.name, adapterConfig: existing.adapterConfig },
+        input: req.body,
+      });
+      bundle = result.bundle;
+      adapterConfig = result.adapterConfig as Record<string, unknown>;
+    } else {
+      const localResult = await instructions.updateBundle(existing, req.body);
+      bundle = localResult.bundle;
+      adapterConfig = localResult.adapterConfig;
+    }
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       adapterConfig,
@@ -1628,6 +1652,15 @@ export function agentRoutes(db: Db) {
       return;
     }
 
+    if (!isLocalFileOperation(existing.companyId)) {
+      const result = await dispatchFileOperation(db, existing.companyId, "read_file", "agent_instructions", {
+        agent: { id: existing.id, companyId: existing.companyId, name: existing.name, adapterConfig: existing.adapterConfig },
+        relativePath,
+      });
+      res.json(result.file);
+      return;
+    }
+
     res.json(await instructions.readFile(existing, relativePath));
   });
 
@@ -1641,9 +1674,19 @@ export function agentRoutes(db: Db) {
     await assertCanManageInstructionsPath(req, existing);
 
     const actor = getActorInfo(req);
-    const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
-      clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
-    });
+    let result: any;
+    if (!isLocalFileOperation(existing.companyId)) {
+      result = await dispatchFileOperation(db, existing.companyId, "write_file", "agent_instructions", {
+        agent: { id: existing.id, companyId: existing.companyId, name: existing.name, adapterConfig: existing.adapterConfig },
+        path: req.body.path,
+        content: req.body.content,
+        clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
+      });
+    } else {
+      result = await instructions.writeFile(existing, req.body.path, req.body.content, {
+        clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
+      });
+    }
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       result.adapterConfig,
@@ -1696,7 +1739,15 @@ export function agentRoutes(db: Db) {
     }
 
     const actor = getActorInfo(req);
-    const result = await instructions.deleteFile(existing, relativePath);
+    let result: any;
+    if (!isLocalFileOperation(existing.companyId)) {
+      result = await dispatchFileOperation(db, existing.companyId, "delete_file", "agent_instructions", {
+        agent: { id: existing.id, companyId: existing.companyId, name: existing.name, adapterConfig: existing.adapterConfig },
+        relativePath,
+      });
+    } else {
+      result = await instructions.deleteFile(existing, relativePath);
+    }
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,
