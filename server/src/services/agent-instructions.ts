@@ -63,6 +63,12 @@ type AgentInstructionsBundle = {
   legacyPromptTemplateActive: boolean;
   legacyBootstrapPromptTemplateActive: boolean;
   files: AgentInstructionsFileSummary[];
+  /**
+   * When `recoverManagedBundleState` corrected a stale root path, this contains
+   * the fixed `adapterConfig` that should be persisted back to the DB.
+   * `null` when the stored config is already correct.
+   */
+  correctedAdapterConfig: Record<string, unknown> | null;
 };
 
 type BundleState = {
@@ -74,6 +80,8 @@ type BundleState = {
   warnings: string[];
   legacyPromptTemplateActive: boolean;
   legacyBootstrapPromptTemplateActive: boolean;
+  /** True when recovery changed the config from what was stored in the DB. */
+  configDrifted: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -270,6 +278,7 @@ function deriveBundleState(agent: AgentLike): BundleState {
     warnings,
     legacyPromptTemplateActive: Boolean(asString(config[PROMPT_KEY])),
     legacyBootstrapPromptTemplateActive: Boolean(asString(config[BOOTSTRAP_PROMPT_KEY])),
+    configDrifted: false,
   };
 }
 
@@ -326,6 +335,7 @@ async function recoverManagedBundleState(agent: AgentLike, state: BundleState): 
     entryFile: recoveredEntryFile,
     resolvedEntryPath: path.resolve(managedRootPath, recoveredEntryFile),
     warnings,
+    configDrifted: true,
   };
 }
 
@@ -345,6 +355,16 @@ function toBundle(agent: AgentLike, state: BundleState, files: AgentInstructions
     });
   }
   nextFiles.sort((left, right) => left.path.localeCompare(right.path));
+
+  let correctedAdapterConfig: Record<string, unknown> | null = null;
+  if (state.configDrifted && state.rootPath && state.mode) {
+    correctedAdapterConfig = applyBundleConfig(state.config, {
+      mode: state.mode,
+      rootPath: state.rootPath,
+      entryFile: state.entryFile,
+    });
+  }
+
   return {
     agentId: agent.id,
     companyId: agent.companyId,
@@ -358,6 +378,7 @@ function toBundle(agent: AgentLike, state: BundleState, files: AgentInstructions
     legacyPromptTemplateActive: state.legacyPromptTemplateActive,
     legacyBootstrapPromptTemplateActive: state.legacyBootstrapPromptTemplateActive,
     files: nextFiles,
+    correctedAdapterConfig,
   };
 }
 
@@ -449,6 +470,88 @@ export function syncInstructionsBundleConfigFromFilePath(
     ? "managed"
     : "external";
   return applyBundleConfig(next, { mode, rootPath, entryFile });
+}
+
+/**
+ * Resolve the `instructionsFilePath` for the **current** server node.
+ *
+ * In multi-server deployments, the `instructionsFilePath` stored in the DB is
+ * an absolute local path from whichever server originally created the company.
+ * When a different server picks up the agent, that path won't exist.
+ *
+ * This function checks whether the stored path belongs to a managed bundle and,
+ * if so, re-derives the equivalent path using the local server's instance root.
+ * External bundle paths are left as-is (they're user-managed).
+ */
+export function resolveLocalInstructionsFilePath(
+  agent: AgentLike,
+  adapterConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  const storedPath = asString(adapterConfig[FILE_KEY]);
+  if (!storedPath) return adapterConfig;
+
+  const localManagedRoot = resolveManagedInstructionsRoot(agent);
+  const entryFile = path.basename(storedPath);
+
+  // If the stored path already points to the local managed root, nothing to do.
+  if (path.isAbsolute(storedPath) && storedPath.startsWith(localManagedRoot)) {
+    return adapterConfig;
+  }
+
+  // Check if this is a "managed" bundle by looking at the bundle mode.
+  const bundleMode = asString(adapterConfig[MODE_KEY]);
+  if (bundleMode === "managed") {
+    // Re-derive the path using the local managed root.
+    const localPath = path.join(localManagedRoot, entryFile);
+    return { ...adapterConfig, [FILE_KEY]: localPath };
+  }
+
+  // For bundles without an explicit mode, heuristically detect managed ones.
+  // If the path contains /companies/<id>/agents/<id>/instructions/ pattern,
+  // it's a managed path from another server — re-derive locally.
+  const managedPathPattern = path.join("companies", agent.companyId, "agents", agent.id, "instructions");
+  if (storedPath.includes(managedPathPattern)) {
+    const localPath = path.join(localManagedRoot, entryFile);
+    return { ...adapterConfig, [FILE_KEY]: localPath };
+  }
+
+  return adapterConfig;
+}
+
+/**
+ * Ensure that the local managed instructions directory exists for an agent.
+ *
+ * In multi-server deployments, the managed bundle was materialized on the server
+ * that originally created the company. When another server picks up the agent,
+ * the local instructions directory won't exist. This function creates the
+ * directory and writes a minimal entrypoint file so the adapter can read it.
+ *
+ * Returns `true` if the directory already existed, `false` if it was created.
+ */
+export async function ensureLocalManagedInstructions(
+  agent: AgentLike,
+  adapterConfig: Record<string, unknown>,
+): Promise<boolean> {
+  const bundleMode = asString(adapterConfig[MODE_KEY]);
+  if (bundleMode !== "managed") return true;
+
+  const localManagedRoot = resolveManagedInstructionsRoot(agent);
+  const stat = await statIfExists(localManagedRoot);
+  if (stat?.isDirectory()) {
+    // Check if the entry file exists.
+    const entryFile = asString(adapterConfig[ENTRY_KEY]) || ENTRY_FILE_DEFAULT;
+    const entryPath = path.resolve(localManagedRoot, entryFile);
+    const entryStat = await statIfExists(entryPath);
+    if (entryStat?.isFile()) return true;
+  }
+
+  // Directory or entry file missing — create with default content.
+  await fs.mkdir(localManagedRoot, { recursive: true });
+  const entryFile = asString(adapterConfig[ENTRY_KEY]) || ENTRY_FILE_DEFAULT;
+  const entryPath = path.resolve(localManagedRoot, entryFile);
+  const defaultContent = `# Agent Instructions\n\nYou are agent ${agent.id} (${agent.name}). Continue your Paperclip work.\n`;
+  await fs.writeFile(entryPath, defaultContent, "utf8");
+  return false;
 }
 
 export function agentInstructionsService() {

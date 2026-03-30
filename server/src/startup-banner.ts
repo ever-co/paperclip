@@ -33,6 +33,7 @@ type StartupBannerOptions = {
   databaseBackupIntervalMinutes: number;
   databaseBackupRetentionDays: number;
   databaseBackupDir: string;
+  serverId: string | null;
 };
 
 const ansi = {
@@ -163,6 +164,7 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
     row("Heartbeat", heartbeat),
     row("DB Backup", dbBackup),
     row("Backup Dir", opts.databaseBackupDir),
+    row("Server ID", opts.serverId ? color(opts.serverId, "cyan") : color("not set (single-server mode)", "dim")),
     row("Config", configPath),
     agentJwtSecret.status === "warn"
       ? color("  ───────────────────────────────────────────────────────", "yellow")

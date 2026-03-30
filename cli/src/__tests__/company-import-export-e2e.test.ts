@@ -185,8 +185,9 @@ async function api<T>(baseUrl: string, pathname: string, init?: RequestInit): Pr
 
 async function runCliJson<T>(args: string[], opts: { apiBase: string; configPath: string }) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const result = await execFileAsync(
-    "pnpm",
+    pnpmCmd,
     ["--silent", "paperclipai", ...args, "--api-base", opts.apiBase, "--config", opts.configPath, "--json"],
     {
       cwd: repoRoot,
@@ -251,8 +252,9 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
 
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const output = { stdout: [] as string[], stderr: [] as string[] };
+    const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
     const child = spawn(
-      "pnpm",
+      pnpmCmd,
       ["paperclipai", "run", "--config", configPath],
       {
         cwd: repoRoot,
