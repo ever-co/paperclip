@@ -674,7 +674,11 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
 
-      // Tick pending file operations for companies managed by this server.
+    }, config.heartbeatSchedulerIntervalMs);
+
+    // File operation queue runs on a fast 1-second interval so cross-server
+    // file operations (agent instructions, skills) feel near-instant.
+    setInterval(() => {
       void fileOps
         .tickPendingFileOperations()
         .then((result) => {
@@ -685,14 +689,16 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "file operation tick failed");
         });
+    }, 1_000);
 
-      // Periodically clean up completed/failed file operations older than 1 hour.
+    // Clean up completed/failed file operations every 60 seconds.
+    setInterval(() => {
       void fileOps
         .cleanupStaleOperations()
         .catch((err) => {
           logger.error({ err }, "file operation cleanup failed");
         });
-    }, config.heartbeatSchedulerIntervalMs);
+    }, 60_000);
 
     // Periodic server node heartbeat + dynamic affinity refresh.
     if (config.serverId) {
