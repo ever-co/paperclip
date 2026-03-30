@@ -63,6 +63,12 @@ type AgentInstructionsBundle = {
   legacyPromptTemplateActive: boolean;
   legacyBootstrapPromptTemplateActive: boolean;
   files: AgentInstructionsFileSummary[];
+  /**
+   * When `recoverManagedBundleState` corrected a stale root path, this contains
+   * the fixed `adapterConfig` that should be persisted back to the DB.
+   * `null` when the stored config is already correct.
+   */
+  correctedAdapterConfig: Record<string, unknown> | null;
 };
 
 type BundleState = {
@@ -74,6 +80,8 @@ type BundleState = {
   warnings: string[];
   legacyPromptTemplateActive: boolean;
   legacyBootstrapPromptTemplateActive: boolean;
+  /** True when recovery changed the config from what was stored in the DB. */
+  configDrifted: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -270,6 +278,7 @@ function deriveBundleState(agent: AgentLike): BundleState {
     warnings,
     legacyPromptTemplateActive: Boolean(asString(config[PROMPT_KEY])),
     legacyBootstrapPromptTemplateActive: Boolean(asString(config[BOOTSTRAP_PROMPT_KEY])),
+    configDrifted: false,
   };
 }
 
@@ -326,6 +335,7 @@ async function recoverManagedBundleState(agent: AgentLike, state: BundleState): 
     entryFile: recoveredEntryFile,
     resolvedEntryPath: path.resolve(managedRootPath, recoveredEntryFile),
     warnings,
+    configDrifted: true,
   };
 }
 
@@ -345,6 +355,16 @@ function toBundle(agent: AgentLike, state: BundleState, files: AgentInstructions
     });
   }
   nextFiles.sort((left, right) => left.path.localeCompare(right.path));
+
+  let correctedAdapterConfig: Record<string, unknown> | null = null;
+  if (state.configDrifted && state.rootPath && state.mode) {
+    correctedAdapterConfig = applyBundleConfig(state.config, {
+      mode: state.mode,
+      rootPath: state.rootPath,
+      entryFile: state.entryFile,
+    });
+  }
+
   return {
     agentId: agent.id,
     companyId: agent.companyId,
@@ -358,6 +378,7 @@ function toBundle(agent: AgentLike, state: BundleState, files: AgentInstructions
     legacyPromptTemplateActive: state.legacyPromptTemplateActive,
     legacyBootstrapPromptTemplateActive: state.legacyBootstrapPromptTemplateActive,
     files: nextFiles,
+    correctedAdapterConfig,
   };
 }
 

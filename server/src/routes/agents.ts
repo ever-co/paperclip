@@ -1572,7 +1572,14 @@ export function agentRoutes(db: Db) {
       return;
     }
 
-    res.json(await instructions.getBundle(existing));
+    const bundle = await instructions.getBundle(existing);
+
+    // Auto-persist corrected config when recovery fixed a stale cross-server path.
+    if (bundle.correctedAdapterConfig) {
+      void svc.update(id, { adapterConfig: bundle.correctedAdapterConfig }).catch(() => {});
+    }
+
+    res.json(bundle);
   });
 
   router.patch("/agents/:id/instructions-bundle", validate(updateAgentInstructionsBundleSchema), async (req, res) => {
