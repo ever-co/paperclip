@@ -4,7 +4,7 @@ import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { useLocation, useNavigate, useParams } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
-import { companiesApi } from "../api/companies";
+import { companiesApi, serversApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
 import { issuesApi } from "../api/issues";
@@ -54,7 +54,8 @@ import {
   Check,
   Loader2,
   ChevronDown,
-  X
+  X,
+  Server
 } from "lucide-react";
 import { HermesIcon } from "./HermesIcon";
 
@@ -76,6 +77,78 @@ const DEFAULT_TASK_DESCRIPTION = `You are the CEO. You set the direction for the
 - write a hiring plan
 - break the roadmap into concrete tasks and start delegating work`;
 
+function ServerSelectionField({
+  selectedServerId,
+  onSelect,
+}: {
+  selectedServerId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const { data: servers, isLoading } = useQuery({
+    queryKey: ["servers", "list"],
+    queryFn: () => serversApi.list(),
+    staleTime: 30_000,
+  });
+
+  if (isLoading || !servers || servers.length === 0) return null;
+
+  return (
+    <div className="group">
+      <label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1.5 block">
+        <Server className="h-3 w-3" />
+        Assign to server
+      </label>
+      <div className="space-y-1.5">
+        <button
+          type="button"
+          className={cn(
+            "w-full flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors text-left",
+            selectedServerId === null
+              ? "border-foreground bg-accent"
+              : "border-border hover:bg-accent/50"
+          )}
+          onClick={() => onSelect(null)}
+        >
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0" />
+          <span>Any server</span>
+          <span className="text-[11px] text-muted-foreground ml-auto">default</span>
+        </button>
+        {servers.map((server) => (
+          <button
+            key={server.id}
+            type="button"
+            className={cn(
+              "w-full flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors text-left",
+              selectedServerId === server.id
+                ? "border-foreground bg-accent"
+                : "border-border hover:bg-accent/50"
+            )}
+            onClick={() => onSelect(server.id)}
+          >
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full shrink-0",
+                server.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"
+              )}
+            />
+            <span className="font-mono text-xs">{server.id}</span>
+            <span
+              className={cn(
+                "text-[11px] ml-auto",
+                server.status === "online"
+                  ? "text-green-600 dark:text-green-400"
+                  : "text-muted-foreground"
+              )}
+            >
+              {server.status}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
   const { companies, setSelectedCompanyId, loading: companiesLoading } = useCompany();
@@ -84,6 +157,11 @@ export function OnboardingWizard() {
   const location = useLocation();
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const [routeDismissed, setRouteDismissed] = useState(false);
+
+  // Guard: once the user manually advances past step 1 (by creating a company),
+  // the sync-with-options useEffect must not reset the step back.  This ref is
+  // cleared when the wizard is reset/closed.
+  const userAdvancedRef = useRef(false);
 
   const routeOnboardingOptions =
     companyPrefix && companiesLoading
@@ -111,6 +189,7 @@ export function OnboardingWizard() {
   // Step 1
   const [companyName, setCompanyName] = useState("");
   const [companyGoal, setCompanyGoal] = useState("");
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
   // Step 2
   const [agentName, setAgentName] = useState("CEO");
@@ -168,6 +247,10 @@ export function OnboardingWizard() {
   // doesn't get reset after creating a company.
   useEffect(() => {
     if (!effectiveOnboardingOpen) return;
+    // If the user has already advanced past step 1 by creating a company,
+    // don't let a re-render of `effectiveOnboardingOptions` (caused by the
+    // company-list refetch) reset the wizard back to step 1.
+    if (userAdvancedRef.current) return;
     const cId = effectiveOnboardingOptions.companyId ?? null;
     setStep(effectiveOnboardingOptions.initialStep ?? 1);
     setCreatedCompanyId(cId);
@@ -307,6 +390,8 @@ export function OnboardingWizard() {
     setCreatedAgentId(null);
     setCreatedProjectId(null);
     setCreatedIssueRef(null);
+    setSelectedServerId(null);
+    userAdvancedRef.current = false;
   }
 
   function handleClose() {
@@ -385,7 +470,10 @@ export function OnboardingWizard() {
     setLoading(true);
     setError(null);
     try {
-      const company = await companiesApi.create({ name: companyName.trim() });
+      const company = await companiesApi.create({
+        name: companyName.trim(),
+        ...(selectedServerId ? { assignedServerId: selectedServerId } : {}),
+      });
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
@@ -409,6 +497,7 @@ export function OnboardingWizard() {
         setCreatedCompanyGoalId(null);
       }
 
+      userAdvancedRef.current = true;
       setStep(2);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create company");
@@ -455,7 +544,10 @@ export function OnboardingWizard() {
         }
       }
 
-      if (isLocalAdapter) {
+      // For local adapters, run the env test unless the company is assigned to
+      // a remote server (the test would probe the *current* server, not the
+      // target, so the result would be misleading).
+      if (isLocalAdapter && !selectedServerId) {
         const result = adapterEnvResult ?? (await runAdapterEnvironmentTest());
         if (!result) return;
       }
@@ -724,6 +816,10 @@ export function OnboardingWizard() {
                       onChange={(e) => setCompanyGoal(e.target.value)}
                     />
                   </div>
+                  <ServerSelectionField
+                    selectedServerId={selectedServerId}
+                    onSelect={setSelectedServerId}
+                  />
                 </div>
               )}
 
@@ -1015,6 +1111,22 @@ export function OnboardingWizard() {
                           </PopoverContent>
                         </Popover>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Remote-server warning for local adapters */}
+                  {isLocalAdapter && selectedServerId && (
+                    <div className="rounded-md border border-amber-300/60 dark:border-amber-500/30 bg-amber-50/40 dark:bg-amber-500/10 px-3 py-2.5 space-y-1">
+                      <p className="text-xs font-medium text-amber-900/90 dark:text-amber-300 flex items-center gap-1.5">
+                        <Server className="h-3.5 w-3.5 shrink-0" />
+                        Running on remote server
+                      </p>
+                      <p className="text-[11px] text-amber-800/70 dark:text-amber-400/80 leading-relaxed">
+                        This company is assigned to server{" "}
+                        <span className="font-mono">{selectedServerId}</span>.
+                        The adapter CLI must be installed on that server.
+                        The environment test below probes this machine, not the target.
+                      </p>
                     </div>
                   )}
 

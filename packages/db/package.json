@@ -35,8 +35,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc && cp -r src/migrations dist/migrations",
-    "clean": "rm -rf dist",
+    "build": "tsc && shx cp -r src/migrations dist/migrations",
+    "clean": "shx rm -rf dist",
     "typecheck": "tsc --noEmit",
     "generate": "tsc -p tsconfig.json && drizzle-kit generate",
     "migrate": "tsx src/migrate.ts",

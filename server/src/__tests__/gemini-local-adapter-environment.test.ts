@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-gemini-local/server";
+import { writeFakeNodeCommand } from "./helpers/fake-adapter-command.js";
 
 async function writeFakeGeminiCommand(binDir: string, argsCapturePath: string): Promise<string> {
   const commandPath = path.join(binDir, "gemini");
-  const script = `#!/usr/bin/env node
-const fs = require("node:fs");
+  const scriptBody = `const fs = require("node:fs");
 const outPath = process.env.PAPERCLIP_TEST_ARGS_PATH;
 if (outPath) {
   fs.writeFileSync(outPath, JSON.stringify(process.argv.slice(2)), "utf8");
@@ -22,23 +22,18 @@ console.log(JSON.stringify({
   result: "hello",
 }));
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
-  return commandPath;
+  return writeFakeNodeCommand(commandPath, scriptBody);
 }
 
 async function writeQuotaGeminiCommand(binDir: string): Promise<string> {
   const commandPath = path.join(binDir, "gemini");
-  const script = `#!/usr/bin/env node
-if (process.argv.includes("--help")) {
+  const scriptBody = `if (process.argv.includes("--help")) {
   process.exit(0);
 }
 console.error("429 RESOURCE_EXHAUSTED: You exceeded your current quota and billing details.");
 process.exit(1);
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
-  return commandPath;
+  return writeFakeNodeCommand(commandPath, scriptBody);
 }
 
 describe("gemini_local environment diagnostics", () => {

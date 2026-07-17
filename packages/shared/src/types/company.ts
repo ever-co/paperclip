@@ -13,6 +13,7 @@ export interface Company {
   spentMonthlyCents: number;
   requireBoardApprovalForNewAgents: boolean;
   brandColor: string | null;
+  assignedServerId: string | null;
   logoAssetId: string | null;
   logoUrl: string | null;
   createdAt: Date;

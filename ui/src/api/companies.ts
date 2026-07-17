@@ -11,16 +11,32 @@ import type {
 } from "@paperclipai/shared";
 import { api } from "./client";
 
+export type CompanyServer = {
+  serverId: string;
+  lastSeenAt: string;
+  runCount: number;
+};
+
+export type ServerNode = {
+  id: string;
+  lastHeartbeatAt: string;
+  status: "online" | "offline";
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+};
+
 export type CompanyStats = Record<string, { agentCount: number; issueCount: number }>;
 
 export const companiesApi = {
   list: () => api.get<Company[]>("/companies"),
   get: (companyId: string) => api.get<Company>(`/companies/${companyId}`),
   stats: () => api.get<CompanyStats>("/companies/stats"),
+  getServers: (companyId: string) => api.get<CompanyServer[]>(`/companies/${companyId}/servers`),
   create: (data: {
     name: string;
     description?: string | null;
     budgetMonthlyCents?: number;
+    assignedServerId?: string | null;
   }) =>
     api.post<Company>("/companies", data),
   update: (
@@ -28,7 +44,7 @@ export const companiesApi = {
     data: Partial<
       Pick<
         Company,
-        "name" | "description" | "status" | "budgetMonthlyCents" | "requireBoardApprovalForNewAgents" | "brandColor" | "logoAssetId"
+        "name" | "description" | "status" | "budgetMonthlyCents" | "requireBoardApprovalForNewAgents" | "brandColor" | "logoAssetId" | "assignedServerId"
       >
     >,
   ) => api.patch<Company>(`/companies/${companyId}`, data),
@@ -55,4 +71,8 @@ export const companiesApi = {
     api.post<CompanyPortabilityPreviewResult>("/companies/import/preview", data),
   importBundle: (data: CompanyPortabilityImportRequest) =>
     api.post<CompanyPortabilityImportResult>("/companies/import", data),
+};
+
+export const serversApi = {
+  list: () => api.get<ServerNode[]>("/servers"),
 };

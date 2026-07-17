@@ -26,6 +26,7 @@ import {
   CircleDot,
   DollarSign,
   Calendar,
+  Server,
 } from "lucide-react";
 
 export function Companies() {
@@ -253,6 +254,12 @@ export function Companies() {
                       : <span className="text-xs ml-1">Unlimited budget</span>}
                   </span>
                 </div>
+                {company.assignedServerId && (
+                  <div className="flex items-center gap-1.5">
+                    <Server className="h-3.5 w-3.5" />
+                    <span className="font-mono text-xs">{company.assignedServerId}</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-1.5 ml-auto">
                   <Calendar className="h-3.5 w-3.5" />
                   <span>Created {relativeTime(company.createdAt)}</span>

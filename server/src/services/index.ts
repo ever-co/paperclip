@@ -1,7 +1,7 @@
 export { companyService } from "./companies.js";
 export { companySkillService } from "./company-skills.js";
 export { agentService, deduplicateAgentName } from "./agents.js";
-export { agentInstructionsService, syncInstructionsBundleConfigFromFilePath } from "./agent-instructions.js";
+export { agentInstructionsService, syncInstructionsBundleConfigFromFilePath, resolveLocalInstructionsFilePath, ensureLocalManagedInstructions } from "./agent-instructions.js";
 export { assetService } from "./assets.js";
 export { documentService, extractLegacyPlanBody } from "./documents.js";
 export { projectService } from "./projects.js";
@@ -30,3 +30,4 @@ export { notifyHireApproved, type NotifyHireApprovedInput } from "./hire-hook.js
 export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
+export { fileOperationQueueService, isLocalFileOperation, dispatchFileOperation } from "./file-operation-queue.js";

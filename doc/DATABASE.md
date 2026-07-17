@@ -166,3 +166,20 @@ Inline secret migration command:
 ```sh
 pnpm secrets:migrate-inline-env --apply
 ```
+
+## Shared Database (Multi-Server)
+
+Multiple Paperclip server instances can point to the same external PostgreSQL
+database. Each server sets `PAPERCLIP_SERVER_ID` in its `.env` to identify
+itself, and companies are assigned to specific servers via the UI.
+
+- `PAPERCLIP_SERVER_ID` — unique per-server identifier for run ownership and
+  company affinity
+- Companies are assigned via `assigned_server_id` in the `companies` table,
+  managed through the board UI
+
+When `PAPERCLIP_SERVER_ID` is not set, the server manages all companies
+(single-server default). Migrations are idempotent and can safely be applied
+by any server on startup.
+
+See **doc/DEVELOPING.md § Multi-Server Deployment** for the full setup guide.

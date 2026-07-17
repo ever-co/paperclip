@@ -8,6 +8,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { accessService, agentService, companySkillService, logActivity } from "../services/index.js";
+import { isLocalFileOperation, dispatchFileOperation } from "../services/file-operation-queue.js";
 import { forbidden } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
@@ -87,6 +88,20 @@ export function companySkillRoutes(db: Db) {
     const skillId = req.params.skillId as string;
     const relativePath = String(req.query.path ?? "SKILL.md");
     assertCompanyAccess(req, companyId);
+
+    if (!isLocalFileOperation(companyId)) {
+      const result = await dispatchFileOperation(db, companyId, "read_file", "company_skills", {
+        skillId,
+        relativePath,
+      });
+      if (!result.result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+      res.json(result.result);
+      return;
+    }
+
     const result = await svc.readFile(companyId, skillId, relativePath);
     if (!result) {
       res.status(404).json({ error: "Skill not found" });
@@ -101,7 +116,16 @@ export function companySkillRoutes(db: Db) {
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanMutateCompanySkills(req, companyId);
-      const result = await svc.createLocalSkill(companyId, req.body);
+
+      let result: any;
+      if (!isLocalFileOperation(companyId)) {
+        const remote = await dispatchFileOperation(db, companyId, "create_local", "company_skills", {
+          input: req.body,
+        });
+        result = remote.result;
+      } else {
+        result = await svc.createLocalSkill(companyId, req.body);
+      }
 
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -130,12 +154,23 @@ export function companySkillRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       const skillId = req.params.skillId as string;
       await assertCanMutateCompanySkills(req, companyId);
-      const result = await svc.updateFile(
-        companyId,
-        skillId,
-        String(req.body.path ?? ""),
-        String(req.body.content ?? ""),
-      );
+
+      let result: any;
+      if (!isLocalFileOperation(companyId)) {
+        const remote = await dispatchFileOperation(db, companyId, "update_file", "company_skills", {
+          skillId,
+          path: String(req.body.path ?? ""),
+          content: String(req.body.content ?? ""),
+        });
+        result = remote.result;
+      } else {
+        result = await svc.updateFile(
+          companyId,
+          skillId,
+          String(req.body.path ?? ""),
+          String(req.body.content ?? ""),
+        );
+      }
 
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -164,7 +199,16 @@ export function companySkillRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       await assertCanMutateCompanySkills(req, companyId);
       const source = String(req.body.source ?? "");
-      const result = await svc.importFromSource(companyId, source);
+
+      let result: any;
+      if (!isLocalFileOperation(companyId)) {
+        const remote = await dispatchFileOperation(db, companyId, "import_source", "company_skills", {
+          source,
+        });
+        result = remote.result;
+      } else {
+        result = await svc.importFromSource(companyId, source);
+      }
 
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -179,7 +223,7 @@ export function companySkillRoutes(db: Db) {
         details: {
           source,
           importedCount: result.imported.length,
-          importedSlugs: result.imported.map((skill) => skill.slug),
+          importedSlugs: result.imported.map((skill: any) => skill.slug),
           warningCount: result.warnings.length,
         },
       });
@@ -194,7 +238,16 @@ export function companySkillRoutes(db: Db) {
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanMutateCompanySkills(req, companyId);
-      const result = await svc.scanProjectWorkspaces(companyId, req.body);
+
+      let result: any;
+      if (!isLocalFileOperation(companyId)) {
+        const remote = await dispatchFileOperation(db, companyId, "scan_projects", "company_skills", {
+          input: req.body,
+        });
+        result = remote.result;
+      } else {
+        result = await svc.scanProjectWorkspaces(companyId, req.body);
+      }
 
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -225,7 +278,17 @@ export function companySkillRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     const skillId = req.params.skillId as string;
     await assertCanMutateCompanySkills(req, companyId);
-    const result = await svc.deleteSkill(companyId, skillId);
+
+    let result: any;
+    if (!isLocalFileOperation(companyId)) {
+      const remote = await dispatchFileOperation(db, companyId, "delete_skill", "company_skills", {
+        skillId,
+      });
+      result = remote.result;
+    } else {
+      result = await svc.deleteSkill(companyId, skillId);
+    }
+
     if (!result) {
       res.status(404).json({ error: "Skill not found" });
       return;
@@ -254,7 +317,17 @@ export function companySkillRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     const skillId = req.params.skillId as string;
     await assertCanMutateCompanySkills(req, companyId);
-    const result = await svc.installUpdate(companyId, skillId);
+
+    let result: any;
+    if (!isLocalFileOperation(companyId)) {
+      const remote = await dispatchFileOperation(db, companyId, "install_update", "company_skills", {
+        skillId,
+      });
+      result = remote.result;
+    } else {
+      result = await svc.installUpdate(companyId, skillId);
+    }
+
     if (!result) {
       res.status(404).json({ error: "Skill not found" });
       return;

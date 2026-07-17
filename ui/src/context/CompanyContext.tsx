@@ -28,6 +28,7 @@ interface CompanyContextValue {
     name: string;
     description?: string | null;
     budgetMonthlyCents?: number;
+    assignedServerId?: string | null;
   }) => Promise<Company>;
 }
 
@@ -89,6 +90,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       name: string;
       description?: string | null;
       budgetMonthlyCents?: number;
+      assignedServerId?: string | null;
     }) =>
       companiesApi.create(data),
     onSuccess: (company) => {
@@ -102,6 +104,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       name: string;
       description?: string | null;
       budgetMonthlyCents?: number;
+      assignedServerId?: string | null;
     }) => {
       return createMutation.mutateAsync(data);
     },
